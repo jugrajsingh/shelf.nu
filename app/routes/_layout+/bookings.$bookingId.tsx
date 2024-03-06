@@ -5,7 +5,6 @@ import type {
   MetaFunction,
   LoaderFunctionArgs,
 } from "@remix-run/node";
-import type { ShouldRevalidateFunction } from "@remix-run/react";
 import { useLoaderData } from "@remix-run/react";
 import { useAtomValue } from "jotai";
 import { DateTime } from "luxon";
@@ -54,83 +53,111 @@ export async function loader({ context, request, params }: LoaderFunctionArgs) {
     entity: PermissionEntity.booking,
     action: PermissionAction.create,
   });
+  const bookingId = getRequiredParam(params, "bookingId");
+  const searchParams = getCurrentSearchParams(request);
+
+  /**
+   * If the org id in the params is different than the current organization id,
+   * we need to redirect and set the organization id in the cookie
+   * This is useful when the user is viewing a booking from a different organization that they are part of after clicking link in email
+   */
+  const orgId = searchParams.get("orgId");
+  if (orgId && orgId !== organizationId) {
+    return redirect(`/bookings/${bookingId}`, {
+      headers: [setCookie(await setSelectedOrganizationIdCookie(orgId))],
+    });
+  }
 
   const isSelfService = role === OrganizationRoles.SELF_SERVICE;
-
-  const bookingId = getRequiredParam(params, "bookingId");
-  const user = await getUserByID(authSession.userId);
-
-  const teamMembers = await db.teamMember.findMany({
-    where: {
-      deletedAt: null,
-      organizationId,
-      userId: {
-        not: null,
-      },
-    },
-    include: {
-      user: true,
-    },
-    orderBy: {
-      userId: "asc",
-    },
+  const booking = await getBooking({
+    id: bookingId,
+    organizationId: organizationId,
   });
 
-  /** We create a teamMember entry to represent the org owner.
-   * Most important thing is passing the ID of the owner as the userId as we are currently only supporting
-   * assigning custody to users, not NRM.
-   */
-  teamMembers.push({
-    id: "owner",
-    name: "owner",
-    user: user,
-    userId: user?.id as string,
-    organizationId,
-    createdAt: new Date(),
-    updatedAt: new Date(),
-    deletedAt: null,
-  });
-
-  const booking = await getBooking({ id: bookingId });
   if (!booking) {
     throw new ShelfStackError({ message: "Booking not found", status: 404 });
   }
 
-  /**
-   * We need to do this in a separate query because we need to filter the bookings within an asset based on the booking.from and booking.to
-   * That way we know if the asset is available or not because we can see if they are booked for the same period
-   */
-  const assets = await db.asset.findMany({
-    where: {
-      id: {
-        in: booking?.assets.map((a) => a.id) || [],
-      },
-    },
-    include: {
-      category: true,
-      custody: true,
-      bookings: {
-        where: {
-          // id: { not: booking.id },
-          ...(booking.from && booking.to
-            ? {
-                status: { in: ["RESERVED", "ONGOING", "OVERDUE"] },
-                OR: [
-                  {
-                    from: { lte: booking.to },
-                    to: { gte: booking.from },
-                  },
-                  {
-                    from: { gte: booking.from },
-                    to: { lte: booking.to },
-                  },
-                ],
-              }
-            : {}),
+  const [teamMembers, org, assets] = await db.$transaction([
+    /**
+     * We need to fetch the team members to be able to display them in the custodian dropdown.
+     */
+    db.teamMember.findMany({
+      where: {
+        deletedAt: null,
+        organizationId,
+        userId: {
+          not: null,
         },
       },
-    },
-  });
+      include: {
+        user: true,
+      },
+      orderBy: {
+        userId: "asc",
+      },
+    }),
+    /** We create a teamMember entry to represent the org owner.
+     * Most important thing is passing the ID of the owner as the userId as we are currently only supporting
+     * assigning custody to users, not NRM.
+     */
+    db.organization.findUnique({
+      where: {
+        id: organizationId,
+      },
+      select: {
+        owner: true,
+      },
+    }),
+    /**
+     * We need to do this in a separate query because we need to filter the bookings within an asset based on the booking.from and booking.to
+     * That way we know if the asset is available or not because we can see if they are booked for the same period
+     */
+    db.asset.findMany({
+      where: {
+        id: {
+          in: booking?.assets.map((a) => a.id) || [],
+        },
+      },
+      include: {
+        category: true,
+        custody: true,
+        bookings: {
+          where: {
+            // id: { not: booking.id },
+            ...(booking.from && booking.to
+              ? {
+                  status: { in: ["RESERVED", "ONGOING", "OVERDUE"] },
+                  OR: [
+                    {
+                      from: { lte: booking.to },
+                      to: { gte: booking.from },
+                    },
+                    {
+                      from: { gte: booking.from },
+                      to: { lte: booking.to },
+                    },
+                  ],
+                }
+              : {}),
+          },
+        },
+      },
+    }),
+  ]);
+
+  if (org?.owner) {
+    teamMembers.push({
+      id: "owner",
+      name: "owner",
+      user: org.owner,
+      userId: org.owner.id as string,
+      organizationId,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      deletedAt: null,
+    });
+  }
 
   /** We replace the assets ids in the booking object with the assets fetched in the separate request.
    * This is useful for more consistent data in the front-end */
@@ -144,7 +171,6 @@ export async function loader({ context, request, params }: LoaderFunctionArgs) {
     });
   }
 
-  const searchParams = getCurrentSearchParams(request);
   const { page, perPageParam } = getParamsValues(searchParams);
   const cookie = await updateCookieWithPerPage(request, perPageParam);
   const { perPage } = cookie;
@@ -182,7 +208,7 @@ export const meta: MetaFunction<typeof loader> = ({ data }) => [
 ];
 
 export const handle = {
-  breadcrumb: () => <span>Edit</span>,
+  breadcrumb: () => "single",
 };
 
 export async function action({ context, request, params }: ActionFunctionArgs) {
@@ -303,7 +329,7 @@ export async function action({ context, request, params }: ActionFunctionArgs) {
          * They have delete permissions but shouldnt be able to delete other people's bookings
          * Practically they should not be able to even view/access another booking but this is just an extra security measure
          */
-        const b = await getBooking({ id });
+        const b = await getBooking({ id, organizationId });
         if (
           b?.creatorId !== authSession.userId &&
           b?.custodianUserId !== authSession.userId
@@ -462,16 +488,6 @@ export async function action({ context, request, params }: ActionFunctionArgs) {
       return null;
   }
 }
-
-export const shouldRevalidate: ShouldRevalidateFunction = ({
-  defaultShouldRevalidate,
-}) =>
-  /** Dont revalidate on add-assets route */
-  // const isAddAssetsRoute = nextUrl.pathname.includes("add-assets");
-  // if (isAddAssetsRoute) {
-  //   return false;
-  // }
-  defaultShouldRevalidate;
 
 export default function BookingEditPage() {
   const name = useAtomValue(dynamicTitleAtom);

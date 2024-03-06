@@ -1,10 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import {
-  type Asset,
-  type Booking,
-  type Category,
-  type Custody,
-} from "@prisma/client";
+import type { Asset, Booking, Category, Custody } from "@prisma/client";
 import type {
   ActionFunctionArgs,
   LinksFunction,
@@ -77,7 +72,7 @@ export const loader = async ({
     plural: "assets",
   };
 
-  const booking = await getBooking({ id });
+  const booking = await getBooking({ id, organizationId });
   if (!booking) {
     throw new ShelfStackError({ message: "Booking not found" });
   }

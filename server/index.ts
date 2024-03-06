@@ -13,7 +13,8 @@ import { ShelfStackError } from "~/utils/error";
 
 import { logger } from "./logger";
 import { cache, protect, refreshSession } from "./middleware";
-import { authSessionKey, type FlashData, type SessionData } from "./session";
+import { authSessionKey } from "./session";
+import type { FlashData, SessionData } from "./session";
 
 // Server will not start if the env is not valid
 initEnv();
@@ -99,17 +100,18 @@ app.use(
       "/join",
       "/login",
       "/logout",
+      "/otp",
       "/oauth/callback",
-      "/resend-email-confirmation",
+      "/resend-otp",
       "/reset-password",
-      "/send-magic-link",
+      "/send-otp",
       "/verify-email",
       "/healthcheck",
       "/api/public-stats",
       "/api/oss-friends",
       "/api/stripe-webhook",
       "/qr",
-      "/qr/:path*/",
+      "/qr/:path*",
       "/qr/:path*/contact-owner",
       "/qr/:path*/not-logged-in",
     ],
