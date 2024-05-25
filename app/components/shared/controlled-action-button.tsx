@@ -1,6 +1,6 @@
-import { tw } from "~/utils";
-import type { ButtonProps } from ".";
-import { Button } from ".";
+import { tw } from "~/utils/tw";
+import type { ButtonProps } from "./button";
+import { Button } from "./button";
 import { HoverCard, HoverCardContent, HoverCardTrigger } from "./hover-card";
 import type { ButtonVariant } from "../layout/header/types";
 
@@ -77,10 +77,8 @@ const HoverMessage = ({
           {buttonContent.message}
           {!skipCta ? (
             <span>
-              Please consider{" "}
-              <Button to="/settings/subscription" variant={"link"}>
-                {buttonContent.ctaText}
-              </Button>
+              {" "}
+              Please switch to your team workspace to use this feature
             </span>
           ) : null}
           .

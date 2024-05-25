@@ -1,7 +1,7 @@
-import type { Scan } from ".prisma/client";
-import { ShelfError } from "~/utils";
+import type { Scan } from "@prisma/client";
+import parser from "ua-parser-js";
 import { getDateTimeFormat } from "~/utils/client-hints";
-var parser = require("ua-parser-js");
+import { ShelfError } from "~/utils/error";
 
 export function parseScanData({
   scan,
@@ -25,14 +25,18 @@ export function parseScanData({
           ? `${scan.latitude}, ${scan.longitude}`
           : "Unknown location";
 
-      const dateTime = getDateTimeFormat(request).format(scan.createdAt);
-      const ua = parser(scan.userAgent);
+      const dateTime = getDateTimeFormat(request, {
+        dateStyle: "short",
+        timeStyle: "short",
+      }).format(scan.createdAt);
+      const ua = parser(scan.userAgent || "");
 
       return {
         scannedBy,
         coordinates,
         dateTime,
         ua,
+        manuallyGenerated: scan.manuallyGenerated,
       };
     }
 

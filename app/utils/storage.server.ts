@@ -4,11 +4,12 @@ import {
 } from "@remix-run/node";
 import type { ResizeOptions } from "sharp";
 
-import { getSupabaseAdmin } from "~/integrations/supabase";
-import { cropImage, extractImageNameFromSupabaseUrl } from ".";
+import { getSupabaseAdmin } from "~/integrations/supabase/client";
+import { cropImage } from "./crop-image";
 import { SUPABASE_URL } from "./env";
 import type { ErrorLabel } from "./error";
 import { ShelfError } from "./error";
+import { extractImageNameFromSupabaseUrl } from "./extract-image-name-from-supabase-url";
 import { Logger } from "./logger";
 
 const label: ErrorLabel = "File storage";
@@ -199,7 +200,6 @@ export async function deleteAssetImage({
 }) {
   try {
     const path = extractImageNameFromSupabaseUrl({ url, bucketName });
-
     if (!path) {
       throw new ShelfError({
         cause: null,

@@ -4,13 +4,13 @@ import { useAtom } from "jotai";
 import { switchingWorkspaceAtom } from "~/atoms/switching-workspace";
 import { ScanQRIcon, ShelfTypography } from "~/components/icons/library";
 import type { loader } from "~/routes/_layout+/_layout";
-import { tw } from "~/utils";
+import { tw } from "~/utils/tw";
 
 import { toggleMobileNavAtom } from "./atoms";
 import SidebarBottom from "./bottom";
 import MenuButton from "./menu-button";
 import MenuItems from "./menu-items";
-import { OrganizationSelect } from "./organization-select";
+import { OrganizationSelectForm } from "./organization-select-form";
 import Overlay from "./overlay";
 
 export default function Sidebar() {
@@ -72,7 +72,7 @@ export default function Sidebar() {
           optimisticMinimizedSidebar
             ? "collapsed-navigation md:w-[82px] md:overflow-hidden"
             : "md:left-0 md:w-[312px]",
-          isMobileNavOpen ? "left-0 w-[312px] overflow-hidden " : "left-[-100%]"
+          isMobileNavOpen ? "left-0 w-[312px] overflow-hidden " : "-left-full"
         )}
       >
         <div className="flex flex-1 flex-col gap-6 overflow-y-auto overflow-x-hidden">
@@ -94,7 +94,7 @@ export default function Sidebar() {
             </Link>
           </div>
           <div className="">
-            <OrganizationSelect key={currentOrganizationId} />
+            <OrganizationSelectForm key={currentOrganizationId} />
           </div>
           <div className={tw("flex-1", workspaceSwitching ? "opacity-50" : "")}>
             <MenuItems fetcher={sidebarFetcher} />

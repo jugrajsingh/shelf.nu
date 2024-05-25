@@ -3,11 +3,11 @@ import { NavLink, useLoaderData, useLocation } from "@remix-run/react";
 import { motion } from "framer-motion";
 import { useAtom } from "jotai";
 import { switchingWorkspaceAtom } from "~/atoms/switching-workspace";
-import { SwitchIcon } from "~/components/icons/library";
+import Icon from "~/components/icons/icon";
 import { ControlledActionButton } from "~/components/shared/controlled-action-button";
 import { useMainMenuItems } from "~/hooks/use-main-menu-items";
 import type { loader } from "~/routes/_layout+/_layout";
-import { tw } from "~/utils";
+import { tw } from "~/utils/tw";
 import { toggleMobileNavAtom } from "./atoms";
 import { ChatWithAnExpert } from "./chat-with-an-expert";
 
@@ -17,8 +17,6 @@ const MenuItems = ({ fetcher }: { fetcher: FetcherWithComponents<any> }) => {
     useLoaderData<typeof loader>();
   const { menuItemsTop, menuItemsBottom } = useMainMenuItems();
   const location = useLocation();
-  /** We need to do this becasue of a special way we handle the bookings link that doesnt allow us to use NavLink currently */
-  const isBookingsRoute = location.pathname.includes("/bookings");
   const [workspaceSwitching] = useAtom(switchingWorkspaceAtom);
 
   return (
@@ -71,8 +69,9 @@ const MenuItems = ({ fetcher }: { fetcher: FetcherWithComponents<any> }) => {
                         </span>
                       </span>
                     ),
-                    message:
-                      "Bookings is a premium feature only available for Team workspaces. ",
+                    message: `${
+                      item.to[0].toUpperCase() + item.to.substring(1)
+                    } is a premium feature only available for Team workspaces.`,
                     ctaText: "upgrading to a team plan",
                   }}
                   buttonProps={{
@@ -86,7 +85,8 @@ const MenuItems = ({ fetcher }: { fetcher: FetcherWithComponents<any> }) => {
                       canUseBookings
                         ? "justify-start focus:ring-0"
                         : "my-0 text-gray-500 hover:bg-gray-50 hover:text-gray-500",
-                      isBookingsRoute
+                      /** We need to do this becasue of a special way we handle the bookings link that doesnt allow us to use NavLink currently */
+                      location.pathname.includes(item.to)
                         ? "active bg-primary-50 text-primary-600"
                         : ""
                     ),
@@ -108,7 +108,9 @@ const MenuItems = ({ fetcher }: { fetcher: FetcherWithComponents<any> }) => {
                   onClick={toggleMobileNav}
                   title={item.label}
                 >
-                  <i className="icon pl-[2px] text-gray-500">{item.icon}</i>
+                  <i className="icon inline-flex pl-[2px] text-gray-500">
+                    {item.icon}
+                  </i>
                   <span className="text whitespace-nowrap transition duration-200 ease-linear">
                     {item.label}
                   </span>
@@ -145,7 +147,9 @@ const MenuItems = ({ fetcher }: { fetcher: FetcherWithComponents<any> }) => {
                   onClick={toggleMobileNav}
                   title={item.label}
                 >
-                  <i className="icon pl-[2px] text-gray-500">{item.icon}</i>
+                  <i className="icon inline-flex pl-[2px] text-gray-500">
+                    {item.icon}
+                  </i>
                   <span className="text whitespace-nowrap transition duration-200 ease-linear">
                     {item.label}
                   </span>
@@ -169,8 +173,8 @@ const MenuItems = ({ fetcher }: { fetcher: FetcherWithComponents<any> }) => {
                     workspaceSwitching ? "pointer-events-none" : ""
                   )}
                 >
-                  <i className="icon pl-[2px] text-gray-500">
-                    <SwitchIcon />
+                  <i className="icon inline-flex pl-[2px] text-gray-500">
+                    <Icon icon="switch" />
                   </i>
                   <span className="text whitespace-nowrap transition duration-200 ease-linear">
                     Minimize

@@ -8,17 +8,21 @@ import { json, redirect } from "@remix-run/node";
 import { useLoaderData } from "@remix-run/react";
 import { DateTime } from "luxon";
 import { BookingForm, NewBookingFormSchema } from "~/components/booking/form";
-import styles from "~/components/booking/styles.new.css";
-import { db } from "~/database";
+import styles from "~/components/booking/styles.new.css?url";
+import { db } from "~/database/db.server";
 
-import { upsertBooking } from "~/modules/booking";
+import { upsertBooking } from "~/modules/booking/service.server";
 import { setSelectedOrganizationIdCookie } from "~/modules/organization/context.server";
-import { data, error, makeShelfError, parseData } from "~/utils";
 import { getClientHint, getHints } from "~/utils/client-hints";
 import { setCookie } from "~/utils/cookies.server";
-import { dateForDateTimeInputValue } from "~/utils/date-fns";
+import { getBookingDefaultStartEndTimes } from "~/utils/date-fns";
 import { sendNotification } from "~/utils/emitter/send-notification.server";
-import { PermissionAction, PermissionEntity } from "~/utils/permissions";
+import { makeShelfError } from "~/utils/error";
+import { data, error, parseData } from "~/utils/http.server";
+import {
+  PermissionAction,
+  PermissionEntity,
+} from "~/utils/permissions/permission.validator.server";
 import { requirePermission } from "~/utils/roles.server";
 
 /**
@@ -38,21 +42,7 @@ export async function loader({ context, request }: LoaderFunctionArgs) {
       entity: PermissionEntity.booking,
       action: PermissionAction.create,
     });
-
     const isSelfService = role === OrganizationRoles.SELF_SERVICE;
-
-    const booking = await upsertBooking(
-      {
-        organizationId,
-        name: "Draft booking",
-        creatorId: authSession.userId,
-        // If the user is self service, we already set them as the custodian as that is the only possible option
-        ...(isSelfService && {
-          custodianUserId: authSession.userId,
-        }),
-      },
-      getClientHint(request)
-    );
 
     const [teamMembers, org] = await Promise.all([
       /**
@@ -103,7 +93,8 @@ export async function loader({ context, request }: LoaderFunctionArgs) {
     return json(
       data({
         showModal: true,
-        booking,
+        isSelfService,
+        selfServiceId: authSession.userId,
         teamMembers,
       }),
       {
@@ -123,19 +114,25 @@ export async function action({ context, request }: ActionFunctionArgs) {
   const { userId } = authSession;
 
   try {
-    const { organizationId } = await requirePermission({
+    const { organizationId, role } = await requirePermission({
       userId: authSession?.userId,
       request,
       entity: PermissionEntity.booking,
       action: PermissionAction.create,
     });
+    const isSelfService = role === OrganizationRoles.SELF_SERVICE;
 
     const formData = await request.formData();
-    const payload = parseData(formData, NewBookingFormSchema(), {
-      additionalData: { userId, organizationId },
-    });
 
-    const { name, custodian, id } = payload;
+    const payload = parseData(
+      formData,
+      NewBookingFormSchema(false, true, getHints(request)),
+      {
+        additionalData: { userId, organizationId },
+      }
+    );
+
+    const { name, custodian } = payload;
     const hints = getHints(request);
 
     const fmt = "yyyy-MM-dd'T'HH:mm";
@@ -147,6 +144,7 @@ export async function action({ context, request }: ActionFunctionArgs) {
         zone: hints.timeZone,
       }
     ).toJSDate();
+
     const to = DateTime.fromFormat(formData.get("endDate")!.toString()!, fmt, {
       zone: hints.timeZone,
     }).toJSDate();
@@ -155,10 +153,13 @@ export async function action({ context, request }: ActionFunctionArgs) {
       {
         custodianUserId: custodian,
         organizationId,
-        id,
         name,
         from,
         to,
+        creatorId: authSession.userId,
+        ...(isSelfService && {
+          custodianUserId: authSession.userId,
+        }),
       },
       getClientHint(request)
     );
@@ -193,10 +194,10 @@ export const handle = {
 
 export const links: LinksFunction = () => [{ rel: "stylesheet", href: styles }];
 export default function NewBooking() {
-  const { booking, teamMembers } = useLoaderData<typeof loader>();
-  const now = new Date();
+  const { isSelfService, selfServiceId } = useLoaderData<typeof loader>();
+  const { startDate, endDate } = getBookingDefaultStartEndTimes();
   return (
-    <div>
+    <div className="booking-inner-wrapper">
       <header className="mb-5">
         <h2>Create new booking</h2>
         <p>
@@ -207,17 +208,9 @@ export default function NewBooking() {
       </header>
       <div>
         <BookingForm
-          id={booking.id}
-          name={booking.name}
-          startDate={dateForDateTimeInputValue(new Date(now.setHours(8, 0, 0)))}
-          endDate={dateForDateTimeInputValue(new Date(now.setHours(18, 0, 0)))}
-          custodianUserId={
-            booking.custodianUserId ||
-            teamMembers.find(
-              (member) => member.user?.id === booking.custodianUserId
-            )?.id
-          }
-          isModal={true}
+          startDate={startDate}
+          endDate={endDate}
+          custodianUserId={isSelfService ? selfServiceId : undefined}
         />
       </div>
     </div>

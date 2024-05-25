@@ -1,4 +1,4 @@
-import type { Category, Asset, Tag, Custody } from "@prisma/client";
+import type { Category, Asset, Tag, Custody, Kit } from "@prisma/client";
 import { OrganizationRoles, AssetStatus } from "@prisma/client";
 import type {
   LinksFunction,
@@ -14,34 +14,49 @@ import { AssetStatusBadge } from "~/components/assets/asset-status-badge";
 import { ImportButton } from "~/components/assets/import-button";
 import { StatusFilter } from "~/components/booking/status-filter";
 import DynamicDropdown from "~/components/dynamic-dropdown/dynamic-dropdown";
-import { ChevronRight } from "~/components/icons";
+import { ChevronRight, KitIcon } from "~/components/icons/library";
 import Header from "~/components/layout/header";
 import type { HeaderData } from "~/components/layout/header/types";
-import { Filters, List } from "~/components/list";
+import { List } from "~/components/list";
 import { ListContentWrapper } from "~/components/list/content-wrapper";
+import { Filters } from "~/components/list/filters";
 import type { ListItemData } from "~/components/list/list-item";
 import { Badge } from "~/components/shared/badge";
 import { Button } from "~/components/shared/button";
+import { GrayBadge } from "~/components/shared/gray-badge";
 import { Image } from "~/components/shared/image";
 import { Tag as TagBadge } from "~/components/shared/tag";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "~/components/shared/tooltip";
 import { Td, Th } from "~/components/table";
-import { db } from "~/database";
-import { useClearValueFromParams, useSearchParamHasValue } from "~/hooks";
+import { db } from "~/database/db.server";
+import {
+  useClearValueFromParams,
+  useSearchParamHasValue,
+} from "~/hooks/use-search-param-utils";
 import { useUserIsSelfService } from "~/hooks/user-user-is-self-service";
 import {
   getPaginatedAndFilterableAssets,
   updateAssetsWithBookingCustodians,
-} from "~/modules/asset";
-import { getOrganizationTierLimit } from "~/modules/tier";
-import assetCss from "~/styles/assets.css";
-import { data, error, tw } from "~/utils";
+} from "~/modules/asset/service.server";
+import { getOrganizationTierLimit } from "~/modules/tier/service.server";
+import assetCss from "~/styles/assets.css?url";
 import { appendToMetaTitle } from "~/utils/append-to-meta-title";
 import { setCookie, userPrefs } from "~/utils/cookies.server";
 import { ShelfError, makeShelfError } from "~/utils/error";
+import { data, error } from "~/utils/http.server";
 import { isPersonalOrg } from "~/utils/organization";
-import { PermissionAction, PermissionEntity } from "~/utils/permissions";
+import {
+  PermissionAction,
+  PermissionEntity,
+} from "~/utils/permissions/permission.validator.server";
 import { requirePermission } from "~/utils/roles.server";
 import { canImportAssets } from "~/utils/subscription";
+import { tw } from "~/utils/tw";
 
 export interface IndexResponse {
   /** Page number. Starts at 1 */
@@ -147,6 +162,8 @@ export async function loader({ context, request }: LoaderFunctionArgs) {
         totalTags,
         locations,
         totalLocations,
+        teamMembers,
+        totalTeamMembers,
       },
     ] = await Promise.all([
       getOrganizationTierLimit({
@@ -209,6 +226,8 @@ export async function loader({ context, request }: LoaderFunctionArgs) {
         totalTags,
         locations,
         totalLocations,
+        teamMembers,
+        totalTeamMembers,
       }),
       {
         headers: [setCookie(await userPrefs.serialize(cookie))],
@@ -244,9 +263,15 @@ export default function AssetIndexPage() {
   const hasFiltersToClear = useSearchParamHasValue(
     "category",
     "tag",
-    "location"
+    "location",
+    "teamMember"
   );
-  const clearFilters = useClearValueFromParams("category", "tag", "location");
+  const clearFilters = useClearValueFromParams(
+    "category",
+    "tag",
+    "location",
+    "teamMember"
+  );
   const { canImportAssets } = useLoaderData<typeof loader>();
   const isSelfService = useUserIsSelfService();
 
@@ -263,7 +288,7 @@ export default function AssetIndexPage() {
               icon="asset"
               data-test-id="createNewAsset"
             >
-              New Asset
+              New asset
             </Button>
           </>
         ) : null}
@@ -281,7 +306,7 @@ export default function AssetIndexPage() {
                   as="button"
                   onClick={clearFilters}
                   variant="link"
-                  className="block max-w-none font-normal  text-gray-500 hover:text-gray-600"
+                  className="block min-w-28 max-w-none font-normal text-gray-500 hover:text-gray-600"
                   type="button"
                 >
                   Clear all filters
@@ -290,7 +315,7 @@ export default function AssetIndexPage() {
               </div>
             ) : null}
 
-            <div className="flex w-full justify-around gap-2 p-3 md:w-auto md:justify-end md:p-0 lg:gap-4">
+            <div className="flex w-full items-center justify-around gap-2 p-3 md:w-auto md:justify-end md:p-0 lg:gap-4">
               <DynamicDropdown
                 trigger={
                   <div className="flex cursor-pointer items-center gap-2">
@@ -298,8 +323,9 @@ export default function AssetIndexPage() {
                     <ChevronRight className="hidden rotate-90 md:inline" />
                   </div>
                 }
-                model={{ name: "category", key: "name" }}
+                model={{ name: "category", queryKey: "name" }}
                 label="Filter by category"
+                placeholder="Search categories"
                 initialDataKey="categories"
                 countKey="totalCategories"
               />
@@ -309,8 +335,8 @@ export default function AssetIndexPage() {
                     Tags <ChevronRight className="hidden rotate-90 md:inline" />
                   </div>
                 }
-                model={{ name: "tag", key: "name" }}
-                label="Filter by tags"
+                model={{ name: "tag", queryKey: "name" }}
+                label="Filter by tag"
                 initialDataKey="tags"
                 countKey="totalTags"
               />
@@ -321,8 +347,8 @@ export default function AssetIndexPage() {
                     <ChevronRight className="hidden rotate-90 md:inline" />
                   </div>
                 }
-                model={{ name: "location", key: "name" }}
-                label="Filter by Location"
+                model={{ name: "location", queryKey: "name" }}
+                label="Filter by location"
                 initialDataKey="locations"
                 countKey="totalLocations"
                 renderItem={({ metadata }) => (
@@ -338,6 +364,27 @@ export default function AssetIndexPage() {
                     <div>{metadata.name}</div>
                   </div>
                 )}
+              />
+              <DynamicDropdown
+                trigger={
+                  <div className="flex cursor-pointer items-center gap-2">
+                    Custodian{" "}
+                    <ChevronRight className="hidden rotate-90 md:inline" />
+                  </div>
+                }
+                model={{
+                  name: "teamMember",
+                  queryKey: "name",
+                  deletedAt: null,
+                }}
+                transformItem={(item) => ({
+                  ...item,
+                  id: item.metadata?.userId ? item.metadata.userId : item.id,
+                })}
+                label="Filter by custodian"
+                placeholder="Search team members"
+                initialDataKey="teamMembers"
+                countKey="totalTeamMembers"
               />
             </div>
           </div>
@@ -366,6 +413,7 @@ const ListAssetContent = ({
   item,
 }: {
   item: Asset & {
+    kit: Kit;
     category?: Category;
     tags?: Tag[];
     custody: Custody & {
@@ -381,7 +429,7 @@ const ListAssetContent = ({
     };
   };
 }) => {
-  const { category, tags, custody, location } = item;
+  const { category, tags, custody, location, kit } = item;
   const isSelfService = useUserIsSelfService();
   return (
     <>
@@ -389,7 +437,7 @@ const ListAssetContent = ({
       <Td className="w-full whitespace-normal p-0 md:p-0">
         <div className="flex justify-between gap-3 p-4 md:justify-normal md:px-6">
           <div className="flex items-center gap-3">
-            <div className="flex size-12 shrink-0 items-center justify-center">
+            <div className="relative flex size-12 shrink-0 items-center justify-center">
               <AssetImage
                 asset={{
                   assetId: item.id,
@@ -399,6 +447,22 @@ const ListAssetContent = ({
                 }}
                 className="size-full rounded-[4px] border object-cover"
               />
+
+              {kit?.id ? (
+                <TooltipProvider>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <div className="absolute -bottom-1 -right-1 flex size-4 items-center justify-center rounded-full border-2 border-white bg-gray-200">
+                        <KitIcon className="size-2" />
+                      </div>
+                    </TooltipTrigger>
+
+                    <TooltipContent side="top">
+                      <p className="text-sm">{kit.name}</p>
+                    </TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
+              ) : null}
             </div>
             <div className="min-w-[130px]">
               <span className="word-break mb-1 block font-medium">
@@ -453,7 +517,7 @@ const ListAssetContent = ({
                     alt=""
                   />
                 ) : null}
-                <span className="mt-[1px]">{custody.custodian.name}</span>
+                <span className="mt-px">{custody.custodian.name}</span>
               </>
             </GrayBadge>
           ) : null}
@@ -490,13 +554,3 @@ const ListItemTagsColumn = ({ tags }: { tags: Tag[] | undefined }) => {
     </div>
   ) : null;
 };
-
-const GrayBadge = ({
-  children,
-}: {
-  children: string | JSX.Element | JSX.Element[];
-}) => (
-  <span className="inline-flex w-max items-center justify-center rounded-2xl bg-gray-100 px-2 py-[2px] text-center text-[12px] font-medium text-gray-700">
-    {children}
-  </span>
-);

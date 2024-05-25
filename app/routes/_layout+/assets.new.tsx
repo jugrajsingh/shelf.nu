@@ -12,11 +12,10 @@ import {
   createNote,
   getAllEntriesForCreateAndEdit,
   updateAssetMainImage,
-} from "~/modules/asset";
-import { getActiveCustomFields } from "~/modules/custom-field";
-import { assertWhetherQrBelongsToCurrentOrganization } from "~/modules/qr";
-import { buildTagsSet } from "~/modules/tag";
-import { assertIsPost, data, error, parseData, slugify } from "~/utils";
+} from "~/modules/asset/service.server";
+import { getActiveCustomFields } from "~/modules/custom-field/service.server";
+import { assertWhetherQrBelongsToCurrentOrganization } from "~/modules/qr/service.server";
+import { buildTagsSet } from "~/modules/tag/service.server";
 import { appendToMetaTitle } from "~/utils/append-to-meta-title";
 import {
   extractCustomFieldValuesFromPayload,
@@ -24,10 +23,21 @@ import {
 } from "~/utils/custom-fields";
 import { sendNotification } from "~/utils/emitter/send-notification.server";
 import { makeShelfError } from "~/utils/error";
-import { PermissionAction, PermissionEntity } from "~/utils/permissions";
+import {
+  assertIsPost,
+  data,
+  error,
+  getCurrentSearchParams,
+  parseData,
+} from "~/utils/http.server";
+import {
+  PermissionAction,
+  PermissionEntity,
+} from "~/utils/permissions/permission.validator.server";
 import { requirePermission } from "~/utils/roles.server";
+import { slugify } from "~/utils/slugify";
 
-const title = "New Asset";
+const title = "New asset";
 const header = {
   title,
 };
@@ -52,16 +62,17 @@ export async function loader({ context, request }: LoaderFunctionArgs) {
       organizationId,
     });
 
-    const {
-      categories,
-      totalCategories,
-      tags,
-      locations,
-      totalLocations,
-      customFields,
-    } = await getAllEntriesForCreateAndEdit({
+    const { categories, totalCategories, tags, locations, totalLocations } =
+      await getAllEntriesForCreateAndEdit({
+        organizationId,
+        request,
+      });
+
+    const searchParams = getCurrentSearchParams(request);
+
+    const customFields = await getActiveCustomFields({
       organizationId,
-      request,
+      category: searchParams.get("category"),
     });
 
     return json(
@@ -105,8 +116,11 @@ export async function action({ context, request }: LoaderFunctionArgs) {
       action: PermissionAction.create,
     });
 
+    const searchParams = getCurrentSearchParams(request);
+
     const customFields = await getActiveCustomFields({
       organizationId,
+      category: searchParams.get("category"),
     });
 
     const FormSchema = mergedSchema({
@@ -176,6 +190,13 @@ export async function action({ context, request }: LoaderFunctionArgs) {
       message: "Your asset has been created successfully",
       icon: { name: "success", variant: "success" },
       senderId: authSession.userId,
+    });
+
+    await createNote({
+      content: `Asset was created by **${asset.user.firstName?.trim()} ${asset.user.lastName?.trim()}**`,
+      type: "UPDATE",
+      userId: authSession.userId,
+      assetId: asset.id,
     });
 
     if (asset.location) {

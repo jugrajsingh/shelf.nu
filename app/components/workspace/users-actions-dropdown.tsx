@@ -1,4 +1,3 @@
-import { useState } from "react";
 import type { InviteStatuses, User } from "@prisma/client";
 import { useFetcher } from "@remix-run/react";
 import {
@@ -6,15 +5,16 @@ import {
   RemoveUserIcon,
   UserXIcon,
   VerticalDotsIcon,
-} from "~/components/icons";
+} from "~/components/icons/library";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuTrigger,
 } from "~/components/shared/dropdown";
 
-import { isFormProcessing } from "~/utils";
-import { Button } from "../shared";
+import { isFormProcessing } from "~/utils/form";
+import { useControlledDropdownMenu } from "~/utils/use-controlled-dropdown-menu";
+import { Button } from "../shared/button";
 import { Spinner } from "../shared/spinner";
 
 export function TeamUsersActionsDropdown({
@@ -32,7 +32,7 @@ export function TeamUsersActionsDropdown({
 }) {
   const fetcher = useFetcher();
   const disabled = isFormProcessing(fetcher.state);
-  const [open, setOpen] = useState(false);
+  const { ref, open, setOpen } = useControlledDropdownMenu();
 
   return (
     <>
@@ -50,6 +50,7 @@ export function TeamUsersActionsDropdown({
           align="end"
           className="order w-[180px] rounded-md bg-white p-[6px] text-right"
           asChild
+          ref={ref}
         >
           <fetcher.Form
             method="post"

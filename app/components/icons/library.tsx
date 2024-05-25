@@ -3,18 +3,19 @@ import type { SVGProps } from "react";
 export function LogoutIcon(props: SVGProps<SVGSVGElement>) {
   return (
     <svg
-      width={20}
-      height={20}
-      fill="none"
       xmlns="http://www.w3.org/2000/svg"
+      fill="none"
+      viewBox="0 0 16 16"
+      width={16}
+      height={16}
       {...props}
     >
       <path
-        d="M13.333 14.167 17.5 10m0 0-4.167-4.167M17.5 10h-10m0-7.5h-1c-1.4 0-2.1 0-2.635.272a2.5 2.5 0 0 0-1.093 1.093C2.5 4.4 2.5 5.1 2.5 6.5v7c0 1.4 0 2.1.272 2.635a2.5 2.5 0 0 0 1.093 1.092C4.4 17.5 5.1 17.5 6.5 17.5h1"
         stroke="currentColor"
-        strokeWidth={1.667}
         strokeLinecap="round"
         strokeLinejoin="round"
+        strokeWidth={1.5}
+        d="M10.667 11.333 14 8m0 0-3.333-3.333M14 8H6m0-6h-.8c-1.12 0-1.68 0-2.108.218a2 2 0 0 0-.874.874C2 3.52 2 4.08 2 5.2v5.6c0 1.12 0 1.68.218 2.108a2 2 0 0 0 .874.874C3.52 14 4.08 14 5.2 14H6"
       />
     </svg>
   );
@@ -83,8 +84,9 @@ export function ItemsIcon(props: SVGProps<SVGSVGElement>) {
 export function SettingsIcon(props: SVGProps<SVGSVGElement>) {
   return (
     <svg
-      width={22}
-      height={22}
+      width="100%"
+      height="100%"
+      viewBox="0 0 22 22"
       fill="none"
       xmlns="http://www.w3.org/2000/svg"
       {...props}
@@ -753,6 +755,26 @@ export function UnlinkIcon(props: SVGProps<SVGSVGElement>) {
   );
 }
 
+export function LinkIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      width={22}
+      height={22}
+      fill="none"
+      {...props}
+    >
+      <path
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth={2}
+        d="M9 12a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71M13 10a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"
+      />
+    </svg>
+  );
+}
+
 export function MapIcon(props: SVGProps<SVGSVGElement>) {
   return (
     <svg
@@ -777,17 +799,18 @@ export function QuestionsIcon(props: SVGProps<SVGSVGElement>) {
   return (
     <svg
       xmlns="http://www.w3.org/2000/svg"
-      width={20}
-      height={21}
       fill="none"
+      viewBox="0 0 16 16"
+      width={16}
+      height={16}
       {...props}
     >
       <path
         stroke="currentColor"
         strokeLinecap="round"
         strokeLinejoin="round"
-        strokeWidth={2}
-        d="M5 6.5h5M5 10h8m-5.316 6H14.2c1.68 0 2.52 0 3.162-.327a3 3 0 0 0 1.311-1.311C19 13.72 19 12.88 19 11.2V5.8c0-1.68 0-2.52-.327-3.162a3 3 0 0 0-1.311-1.311C16.72 1 15.88 1 14.2 1H5.8c-1.68 0-2.52 0-3.162.327a3 3 0 0 0-1.311 1.311C1 3.28 1 4.12 1 5.8v12.535c0 .533 0 .8.11.937a.5.5 0 0 0 .39.188c.176 0 .384-.167.8-.5l2.385-1.908c.488-.39.731-.585 1.002-.724.241-.122.497-.212.762-.267C6.748 16 7.06 16 7.684 16Z"
+        strokeWidth={1.5}
+        d="M4.667 5.667H8M4.667 8H10m-3.544 4H10.8c1.12 0 1.68 0 2.108-.218a2 2 0 0 0 .874-.874C14 10.48 14 9.92 14 8.8V5.2c0-1.12 0-1.68-.218-2.108a2 2 0 0 0-.874-.874C12.48 2 11.92 2 10.8 2H5.2c-1.12 0-1.68 0-2.108.218a2 2 0 0 0-.874.874C2 3.52 2 4.08 2 5.2v8.357c0 .355 0 .533.073.624.063.08.16.126.26.126.117 0 .256-.112.533-.334l1.59-1.272c.326-.26.488-.39.669-.482.16-.082.331-.142.508-.178C5.832 12 6.04 12 6.456 12Z"
       />
     </svg>
   );
@@ -855,6 +878,24 @@ export const LocationMarkerIcon = (props: SVGProps<SVGSVGElement>) => (
   </svg>
 );
 
+export const GpsMarkerIcon = (props: SVGProps<SVGSVGElement>) => (
+  <svg
+    xmlns="http://www.w3.org/2000/svg"
+    width={20}
+    height={20}
+    fill="none"
+    {...props}
+  >
+    <path
+      stroke="currentColor"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeWidth={2}
+      d="M16.667 10A6.667 6.667 0 0 1 10 16.667M16.667 10A6.667 6.667 0 0 0 10 3.333M16.667 10h1.666M10 16.667A6.667 6.667 0 0 1 3.333 10M10 16.667v1.666M3.333 10A6.667 6.667 0 0 1 10 3.333M3.333 10H1.667M10 3.333V1.667M12.5 10a2.5 2.5 0 1 1-5 0 2.5 2.5 0 0 1 5 0Z"
+    />
+  </svg>
+);
+
 export const UserIcon = (props: SVGProps<SVGSVGElement>) => (
   <svg
     width="18"
@@ -885,7 +926,7 @@ export const UserXIcon = (props: SVGProps<SVGSVGElement>) => (
   >
     <path
       d="M16.5 16L21.5 21M21.5 16L16.5 21M12 15.5H7.5C6.10444 15.5 5.40665 15.5 4.83886 15.6722C3.56045 16.06 2.56004 17.0605 2.17224 18.3389C2 18.9067 2 19.6044 2 21M14.5 7.5C14.5 9.98528 12.4853 12 10 12C7.51472 12 5.5 9.98528 5.5 7.5C5.5 5.01472 7.51472 3 10 3C12.4853 3 14.5 5.01472 14.5 7.5Z"
-      stroke="#101828"
+      stroke="currentColor"
       strokeWidth="2"
       strokeLinecap="round"
       strokeLinejoin="round"
@@ -1170,19 +1211,19 @@ export const DownloadIcon = (props: SVGProps<SVGSVGElement>) => (
 
 export const Profile = (props: SVGProps<SVGSVGElement>) => (
   <svg
-    width="16"
-    height="16"
-    viewBox="0 0 16 16"
-    fill="none"
     xmlns="http://www.w3.org/2000/svg"
+    fill="none"
+    viewBox="0 0 16 16"
+    width={16}
+    height={16}
     {...props}
   >
     <path
-      d="M13.3332 14C13.3332 13.0696 13.3332 12.6044 13.2183 12.2259C12.9598 11.3736 12.2929 10.7067 11.4406 10.4482C11.0621 10.3333 10.5969 10.3333 9.6665 10.3333H6.33317C5.4028 10.3333 4.93761 10.3333 4.55908 10.4482C3.70681 10.7067 3.03986 11.3736 2.78133 12.2259C2.6665 12.6044 2.6665 13.0696 2.6665 14M10.9998 5C10.9998 6.65685 9.65669 8 7.99984 8C6.34298 8 4.99984 6.65685 4.99984 5C4.99984 3.34315 6.34298 2 7.99984 2C9.65669 2 10.9998 3.34315 10.9998 5Z"
       stroke="currentColor"
-      strokeWidth="1.5"
-      stroke-linecap="round"
-      stroke-linejoin="round"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeWidth={1.5}
+      d="M13.333 14c0-.93 0-1.396-.114-1.774a2.666 2.666 0 0 0-1.778-1.778c-.379-.115-.844-.115-1.774-.115H6.333c-.93 0-1.395 0-1.774.115a2.666 2.666 0 0 0-1.777 1.778c-.115.378-.115.844-.115 1.774M11 5a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z"
     />
   </svg>
 );
@@ -1341,6 +1382,25 @@ export const CalendarIcon = (props: SVGProps<SVGSVGElement>) => (
   </svg>
 );
 
+export const BookingsIcon = (props: SVGProps<SVGSVGElement>) => (
+  <svg
+    xmlns="http://www.w3.org/2000/svg"
+    width="100%"
+    height="100%"
+    viewBox="0 0 20 22"
+    fill="none"
+    {...props}
+  >
+    <path
+      stroke="currentColor"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeWidth={2}
+      d="M19 7H1m13-6v3M6 1v3m4 13v-6m-3 3h6m-7.2 7h8.4c1.68 0 2.52 0 3.162-.327a3 3 0 0 0 1.311-1.311C19 18.72 19 17.88 19 16.2V7.8c0-1.68 0-2.52-.327-3.162a3 3 0 0 0-1.311-1.311C16.72 3 15.88 3 14.2 3H5.8c-1.68 0-2.52 0-3.162.327a3 3 0 0 0-1.311 1.311C1 5.28 1 6.12 1 7.8v8.4c0 1.68 0 2.52.327 3.162a3 3 0 0 0 1.311 1.311C3.28 21 4.12 21 5.8 21Z"
+    />
+  </svg>
+);
+
 export const CustomFiedIcon = (props: SVGProps<SVGSVGElement>) => (
   <svg
     width="16"
@@ -1356,6 +1416,63 @@ export const CustomFiedIcon = (props: SVGProps<SVGSVGElement>) => (
       strokeWidth="1.33333"
       strokeLinecap="round"
       strokeLinejoin="round"
+    />
+  </svg>
+);
+
+export const KitIcon = (props: SVGProps<SVGSVGElement>) => (
+  <svg
+    width="100%"
+    height="100%"
+    viewBox="0 0 22 20"
+    fill="none"
+    xmlns="http://www.w3.org/2000/svg"
+    {...props}
+  >
+    <path
+      d="M15 5C15 4.07003 15 3.60504 14.8978 3.22354C14.6204 2.18827 13.8117 1.37962 12.7765 1.10222C12.395 1 11.93 1 11 1C10.07 1 9.60504 1 9.22354 1.10222C8.18827 1.37962 7.37962 2.18827 7.10222 3.22354C7 3.60504 7 4.07003 7 5M4.2 19H17.8C18.9201 19 19.4802 19 19.908 18.782C20.2843 18.5903 20.5903 18.2843 20.782 17.908C21 17.4802 21 16.9201 21 15.8V8.2C21 7.07989 21 6.51984 20.782 6.09202C20.5903 5.71569 20.2843 5.40973 19.908 5.21799C19.4802 5 18.9201 5 17.8 5H4.2C3.07989 5 2.51984 5 2.09202 5.21799C1.71569 5.40973 1.40973 5.71569 1.21799 6.09202C1 6.51984 1 7.07989 1 8.2V15.8C1 16.9201 1 17.4802 1.21799 17.908C1.40973 18.2843 1.71569 18.5903 2.09202 18.782C2.51984 19 3.0799 19 4.2 19Z"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+  </svg>
+);
+
+export const CheckOutIcon = (props: SVGProps<SVGSVGElement>) => (
+  <svg
+    xmlns="http://www.w3.org/2000/svg"
+    fill="none"
+    width="100%"
+    height="100%"
+    viewBox="0 0 16 16"
+    {...props}
+  >
+    <path
+      stroke="currentColor"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeWidth={1.5}
+      d="m12.666 14 2-2m0 0-2-2m2 2h-4M8 10.333H5c-.93 0-1.396 0-1.774.115a2.666 2.666 0 0 0-1.778 1.778c-.115.378-.115.844-.115 1.774m8.333-9a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z"
+    />
+  </svg>
+);
+
+export const CheckInIcon = (props: SVGProps<SVGSVGElement>) => (
+  <svg
+    xmlns="http://www.w3.org/2000/svg"
+    fill="none"
+    width="100%"
+    height="100%"
+    viewBox="0 0 16 16"
+    {...props}
+  >
+    <path
+      stroke="currentColor"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeWidth={1.5}
+      d="m12.666 14-2-2m0 0 2-2m-2 2h4M8 10.333H5c-.93 0-1.396 0-1.774.115a2.666 2.666 0 0 0-1.778 1.778c-.115.378-.115.844-.115 1.774m8.333-9a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z"
     />
   </svg>
 );

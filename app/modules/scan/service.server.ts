@@ -1,7 +1,7 @@
 import type { Scan } from "@prisma/client";
-import { db } from "~/database";
-import type { ErrorLabel } from "~/utils";
-import { ShelfError } from "~/utils";
+import { db } from "~/database/db.server";
+import { ShelfError } from "~/utils/error";
+import type { ErrorLabel } from "~/utils/error";
 
 const label: ErrorLabel = "Scan";
 
@@ -10,13 +10,27 @@ export async function createScan(params: {
   userId?: Scan["userId"];
   qrId: string;
   deleted?: boolean;
+  latitude?: Scan["latitude"];
+  longitude?: Scan["longitude"];
+  manuallyGenerated?: boolean;
 }) {
-  const { userAgent, userId, qrId, deleted = false } = params;
+  const {
+    userAgent,
+    userId,
+    qrId,
+    deleted = false,
+    latitude = null,
+    longitude = null,
+    manuallyGenerated = false,
+  } = params;
 
   try {
     const data = {
       userAgent,
       rawQrId: qrId,
+      latitude,
+      longitude,
+      manuallyGenerated,
     };
 
     /** If user id is passed, connect to that user */
@@ -64,6 +78,7 @@ export async function updateScan(params: {
   userId?: Scan["userId"];
   latitude?: Scan["latitude"];
   longitude?: Scan["longitude"];
+  manuallyGenerated?: boolean;
 }) {
   const { id, userId, latitude = null, longitude = null } = params;
 

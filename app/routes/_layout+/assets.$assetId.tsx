@@ -7,7 +7,7 @@ import type {
 import { redirect, json } from "@remix-run/node";
 import { useFetcher, useLoaderData } from "@remix-run/react";
 
-import mapCss from "maplibre-gl/dist/maplibre-gl.css";
+import mapCss from "maplibre-gl/dist/maplibre-gl.css?url";
 import { useZorm } from "react-zorm";
 import { z } from "zod";
 import ActionsDropdown from "~/components/assets/actions-dropdown";
@@ -15,39 +15,30 @@ import { AssetImage } from "~/components/assets/asset-image";
 import { AssetStatusBadge } from "~/components/assets/asset-status-badge";
 import { Notes } from "~/components/assets/notes";
 import { Switch } from "~/components/forms/switch";
+import Icon from "~/components/icons/icon";
 import ContextualModal from "~/components/layout/contextual-modal";
 import ContextualSidebar from "~/components/layout/contextual-sidebar";
 
 import Header from "~/components/layout/header";
 import type { HeaderData } from "~/components/layout/header/types";
-import { ScanDetails } from "~/components/location";
+import { ScanDetails } from "~/components/location/scan-details";
 
-import { Badge } from "~/components/shared";
+import { Badge } from "~/components/shared/badge";
 import { Button } from "~/components/shared/button";
 import { Card } from "~/components/shared/card";
 import { Tag } from "~/components/shared/tag";
 import TextualDivider from "~/components/shared/textual-divider";
-import { usePosition } from "~/hooks";
+import { usePosition } from "~/hooks/use-position";
 import { useUserIsSelfService } from "~/hooks/user-user-is-self-service";
 import {
   deleteAsset,
   getAsset,
   updateAssetBookingAvailability,
-} from "~/modules/asset";
+} from "~/modules/asset/service.server";
 import type { ShelfAssetCustomFieldValueType } from "~/modules/asset/types";
-import { getScanByQrId } from "~/modules/scan";
+import { getScanByQrId } from "~/modules/scan/service.server";
 import { parseScanData } from "~/modules/scan/utils.server";
-import assetCss from "~/styles/asset.css";
-
-import {
-  tw,
-  isLink,
-  isFormProcessing,
-  error,
-  getParams,
-  data,
-  parseData,
-} from "~/utils";
+import assetCss from "~/styles/asset.css?url";
 
 import { appendToMetaTitle } from "~/utils/append-to-meta-title";
 import { checkExhaustiveSwitch } from "~/utils/check-exhaustive-switch";
@@ -55,10 +46,17 @@ import { getDateTimeFormat, getLocale } from "~/utils/client-hints";
 import { getCustomFieldDisplayValue } from "~/utils/custom-fields";
 import { sendNotification } from "~/utils/emitter/send-notification.server";
 import { makeShelfError } from "~/utils/error";
+import { isFormProcessing } from "~/utils/form";
+import { error, getParams, data, parseData } from "~/utils/http.server";
 import { parseMarkdownToReact } from "~/utils/md.server";
-import { PermissionAction, PermissionEntity } from "~/utils/permissions";
+import { isLink } from "~/utils/misc";
+import {
+  PermissionAction,
+  PermissionEntity,
+} from "~/utils/permissions/permission.validator.server";
 import { requirePermission } from "~/utils/roles.server";
 import { deleteAssetImage } from "~/utils/storage.server";
+import { tw } from "~/utils/tw";
 
 export const AvailabilityForBookingFormSchema = z.object({
   availableToBook: z
@@ -128,8 +126,22 @@ export async function loader({ context, request, params }: LoaderFunctionArgs) {
       data({
         asset: {
           ...asset,
+          createdAt: getDateTimeFormat(request, {
+            dateStyle: "short",
+            timeStyle: "short",
+          }).format(asset.createdAt),
           custody,
           notes,
+          /** We only need customField with same category of asset or without any category */
+          customFields: asset.categoryId
+            ? asset.customFields.filter(
+                (cf) =>
+                  !cf.customField.categories.length ||
+                  cf.customField.categories
+                    .map((c) => c.id)
+                    .includes(asset.categoryId!)
+              )
+            : asset.customFields,
         },
         lastScan,
         header,
@@ -281,15 +293,6 @@ export default function AssetDetailsPage() {
         ) : null}
       </Header>
 
-      <AssetImage
-        asset={{
-          assetId: asset.id,
-          mainImage: asset.mainImage,
-          mainImageExpiration: asset.mainImageExpiration,
-          alt: asset.title,
-        }}
-        className="mx-auto my-8 h-[240px] w-full rounded object-cover sm:w-[343px] md:hidden"
-      />
       <ContextualModal />
       <div className="mt-8 block lg:flex">
         <div className="shrink-0 overflow-hidden lg:w-[343px] xl:w-[400px]">
@@ -301,17 +304,19 @@ export default function AssetDetailsPage() {
               alt: asset.title,
             }}
             className={tw(
-              "mb-8 hidden h-auto w-[343px] rounded border object-cover md:block lg:w-full",
+              " h-auto w-full rounded border object-cover",
               asset.description ? "rounded-b-none border-b-0" : ""
             )}
           />
           {asset.description ? (
-            <Card className="mt-0 rounded-t-none">
-              <p className=" text-gray-600">{asset.description}</p>
+            <Card className="mb-3 mt-0 rounded-t-none border-t-0">
+              <p className="whitespace-pre-wrap text-gray-600">
+                {asset.description}
+              </p>
             </Card>
           ) : null}
           {!isSelfService ? (
-            <Card>
+            <Card className="my-3">
               <fetcher.Form
                 ref={zo.ref}
                 method="post"
@@ -343,9 +348,37 @@ export default function AssetDetailsPage() {
             </Card>
           ) : null}
 
+          {asset.kit?.name ? (
+            <Card className="my-3 py-3">
+              <div className="flex items-center gap-3">
+                <div className="flex size-11 items-center justify-center rounded-full bg-gray-100/50">
+                  <div className="flex size-7 items-center justify-center rounded-full bg-gray-200">
+                    <Icon icon="kit" />
+                  </div>
+                </div>
+
+                <div>
+                  <h3 className="mb-1 text-sm font-semibold">
+                    Included in kit
+                  </h3>
+                  <Button
+                    to={`/kits/${asset.kitId}`}
+                    role="link"
+                    variant="link"
+                    className={tw(
+                      "justify-start text-sm font-normal text-gray-700 underline hover:text-gray-700"
+                    )}
+                  >
+                    {asset.kit.name}
+                  </Button>
+                </div>
+              </div>
+            </Card>
+          ) : null}
+
           {/* We simply check if the asset is available and we can assume that if it't not, there is a custodian assigned */}
           {!isSelfService && !assetIsAvailable && asset?.custody?.createdAt ? (
-            <Card>
+            <Card className="my-3">
               <div className="flex items-center gap-3">
                 <img
                   src="/static/images/default_pfp.jpg"
@@ -366,7 +399,7 @@ export default function AssetDetailsPage() {
           ) : null}
 
           <TextualDivider text="Details" className="mb-8 lg:hidden" />
-          <Card>
+          <Card className="my-3">
             <ul className="item-information">
               <li className="mb-4 flex justify-between">
                 <span className="text-[12px] font-medium text-gray-600">
@@ -374,6 +407,13 @@ export default function AssetDetailsPage() {
                 </span>
                 <div className="max-w-[250px]">{asset.id}</div>
               </li>
+              <li className="mb-4 flex justify-between">
+                <span className="text-[12px] font-medium text-gray-600">
+                  Created
+                </span>
+                <div className="max-w-[250px]">{asset.createdAt}</div>
+              </li>
+
               {asset?.category ? (
                 <li className="mb-4 flex justify-between">
                   <span className="text-[12px] font-medium text-gray-600">
@@ -450,7 +490,7 @@ export default function AssetDetailsPage() {
                 text="Custom fields"
                 className="mb-8 pt-3 lg:hidden"
               />
-              <Card>
+              <Card className="my-3">
                 <ul className="item-information">
                   {customFieldsValues.map((field, index) => {
                     const customFieldDisplayValue = getCustomFieldDisplayValue(

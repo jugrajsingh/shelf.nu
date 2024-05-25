@@ -13,7 +13,12 @@ export const init = async () => {
       scheduler = new PgBoss(DIRECT_URL);
     } else {
       if (!global.scheduler) {
-        global.scheduler = new PgBoss(DIRECT_URL);
+        global.scheduler = new PgBoss({
+          max: 5,
+          connectionString: DIRECT_URL,
+          newJobCheckIntervalSeconds: 60 * 5,
+          noScheduling: true, //need to remove it, if we use cron schedulers in the future, but it comes with a cost of 2 additional polling every minute
+        });
       }
       scheduler = global.scheduler;
     }

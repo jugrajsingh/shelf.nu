@@ -2,25 +2,23 @@ import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
 import { json, redirect } from "@remix-run/node";
 import { Form, useNavigation } from "@remix-run/react";
 import { z } from "zod";
-import { LocationMarkerIcon } from "~/components/icons";
-import { LocationSelect } from "~/components/location";
+import { LocationMarkerIcon } from "~/components/icons/library";
+import { LocationSelect } from "~/components/location/location-select";
 import { Button } from "~/components/shared/button";
 import {
   getAllEntriesForCreateAndEdit,
   getAsset,
   updateAsset,
-} from "~/modules/asset";
-import styles from "~/styles/layout/custom-modal.css";
-import {
-  assertIsPost,
-  getParams,
-  error,
-  isFormProcessing,
-  makeShelfError,
-  parseData,
-} from "~/utils";
+} from "~/modules/asset/service.server";
+import styles from "~/styles/layout/custom-modal.css?url";
 import { sendNotification } from "~/utils/emitter/send-notification.server";
-import { PermissionAction, PermissionEntity } from "~/utils/permissions";
+import { makeShelfError } from "~/utils/error";
+import { isFormProcessing } from "~/utils/form";
+import { assertIsPost, getParams, error, parseData } from "~/utils/http.server";
+import {
+  PermissionAction,
+  PermissionEntity,
+} from "~/utils/permissions/permission.validator.server";
 import { requirePermission } from "~/utils/roles.server";
 
 export async function loader({ context, request, params }: LoaderFunctionArgs) {
@@ -37,13 +35,15 @@ export async function loader({ context, request, params }: LoaderFunctionArgs) {
       entity: PermissionEntity.asset,
       action: PermissionAction.update,
     });
+    const asset = await getAsset({ organizationId, id });
 
     const { locations } = await getAllEntriesForCreateAndEdit({
       organizationId,
       request,
+      defaults: {
+        location: asset.locationId,
+      },
     });
-
-    const asset = await getAsset({ userId, id });
 
     return json({
       asset,
@@ -118,7 +118,7 @@ export default function Custody() {
             <LocationMarkerIcon />
           </div>
           <div className="mb-5">
-            <h4>Update Location</h4>
+            <h4>Update location</h4>
             <p>Adjust the location of this asset.</p>
           </div>
           <div className=" relative z-50 mb-8">

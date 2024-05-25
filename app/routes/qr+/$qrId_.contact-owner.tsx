@@ -4,23 +4,26 @@ import { Form, useActionData, useNavigation } from "@remix-run/react";
 import { useZorm } from "react-zorm";
 import { z } from "zod";
 import Input from "~/components/forms/input";
-import { SuccessIcon } from "~/components/icons";
+import { SuccessIcon } from "~/components/icons/library";
 import { Button } from "~/components/shared/button";
-import { db } from "~/database";
-import { usePosition } from "~/hooks";
-import { getAsset } from "~/modules/asset";
-import { createReport, sendReportEmails } from "~/modules/report-found";
-import { getUserByID } from "~/modules/user";
+import { db } from "~/database/db.server";
+import { usePosition } from "~/hooks/use-position";
+import { getAsset } from "~/modules/asset/service.server";
+import {
+  createReport,
+  sendReportEmails,
+} from "~/modules/report-found/service.server";
+import { getUserByID } from "~/modules/user/service.server";
+import { ShelfError, makeShelfError } from "~/utils/error";
+import { isFormProcessing } from "~/utils/form";
 import {
   assertIsPost,
   data,
   error,
   getParams,
-  isFormProcessing,
   parseData,
-  tw,
-} from "~/utils";
-import { ShelfError, makeShelfError } from "~/utils/error";
+} from "~/utils/http.server";
+import { tw } from "~/utils/tw";
 
 export const NewReportSchema = z.object({
   email: z
@@ -38,13 +41,14 @@ export async function action({ request, params }: ActionFunctionArgs) {
 
     /** Query the QR and include the asset and userId for later use */
     const qr = await db.qr
-      .findFirst({
+      .findUniqueOrThrow({
         where: {
           id: qrId,
         },
         select: {
           asset: true,
           userId: true,
+          organizationId: true,
         },
       })
       .catch((cause) => {
@@ -64,6 +68,20 @@ export async function action({ request, params }: ActionFunctionArgs) {
         additionalData: { qrId },
         label: "QR",
         status: 400,
+      });
+    }
+
+    /**
+     * This should not happen as the user will be redirected to claim the code before they ever land on this page.
+     * We still handle it just in case also to keep TS happy.
+     */
+    if (!qr.organizationId || !qr?.userId) {
+      throw new ShelfError({
+        cause: null,
+        message:
+          "This QR doesn't belong to any user or organization so it cannot be reported as found. If this issue persists, please contact support.",
+        title: "QR is not claimed",
+        label: "QR",
       });
     }
 
@@ -149,11 +167,11 @@ export default function ContactOwner() {
         </Form>
         <div
           className={tw(
-            "rounded-xl border border-solid border-success-300 bg-success-25 p-4 text-center leading-[1]",
+            "rounded-xl border border-solid border-success-300 bg-success-25 p-4 text-center leading-none",
             isReported ? "block" : "hidden"
           )}
         >
-          <p className="inline-flex items-center gap-2 font-semibold leading-[1] text-success-700">
+          <p className="inline-flex items-center gap-2 font-semibold leading-none text-success-700">
             <SuccessIcon />
             Your message has been sent
           </p>

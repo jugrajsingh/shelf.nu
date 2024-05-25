@@ -1,7 +1,7 @@
 import { useState } from "react";
 import type { CustomField } from "@prisma/client";
 import { CustomFieldType } from "@prisma/client";
-import { Form, useActionData, useNavigation } from "@remix-run/react";
+import { Form, Link, useActionData, useNavigation } from "@remix-run/react";
 import { useAtom } from "jotai";
 import { useZorm } from "react-zorm";
 import { z } from "zod";
@@ -9,10 +9,11 @@ import { updateDynamicTitleAtom } from "~/atoms/dynamic-title-atom";
 import { useOrganizationId } from "~/hooks/use-organization-id";
 import type { action as editCustomFieldsAction } from "~/routes/_layout+/settings.custom-fields.$fieldId_.edit";
 import type { action as newCustomFieldsAction } from "~/routes/_layout+/settings.custom-fields.new";
-import { isFormProcessing } from "~/utils";
 import { FIELD_TYPE_NAME } from "~/utils/custom-fields";
+import { isFormProcessing } from "~/utils/form";
 import { getValidationErrors } from "~/utils/http";
 import { zodFieldIsRequired } from "~/utils/zod";
+import CategoriesInput from "../forms/categories-input";
 import FormRow from "../forms/form-row";
 import Input from "../forms/input";
 import OptionBuilder from "../forms/option-builder";
@@ -24,7 +25,7 @@ import {
   SelectValue,
 } from "../forms/select";
 import { Switch } from "../forms/switch";
-import { Button } from "../shared";
+import { Button } from "../shared/button";
 import { Card } from "../shared/card";
 import { Spinner } from "../shared/spinner";
 
@@ -45,6 +46,7 @@ export const NewCustomFieldFormSchema = z.object({
     .transform((val) => (val === "on" ? true : false)),
   organizationId: z.string(),
   options: z.array(z.string()).optional(),
+  categories: z.array(z.string()).optional(),
 });
 
 /** Pass props of the values to be used as default for the form fields */
@@ -56,6 +58,7 @@ interface Props {
   active?: CustomField["active"];
   options?: CustomField["options"];
   isEdit?: boolean;
+  categories?: string[];
 }
 
 const FIELD_TYPE_DESCRIPTION: { [key in CustomFieldType]: string } = {
@@ -75,6 +78,7 @@ export const CustomFieldForm = ({
   type,
   active,
   isEdit = false,
+  categories = [],
 }: Props) => {
   const navigation = useNavigation();
   const zo = useZorm("NewQuestionWizardScreen", NewCustomFieldFormSchema);
@@ -84,6 +88,7 @@ export const CustomFieldForm = ({
   const [selectedType, setSelectedType] = useState<CustomFieldType>(
     type || "TEXT"
   );
+  const [useCategories, setUseCategories] = useState(categories.length > 0);
 
   const [, updateTitle] = useAtom(updateDynamicTitleAtom);
 
@@ -97,7 +102,7 @@ export const CustomFieldForm = ({
   );
 
   return (
-    <Card className="md:w-min">
+    <Card className="w-full md:w-min">
       <Form
         ref={zo.ref}
         method="post"
@@ -219,6 +224,48 @@ export const CustomFieldForm = ({
             </div>
           ) : null}
         </FormRow>
+
+        <div>
+          <FormRow
+            rowLabel="Category"
+            subHeading={
+              <p>
+                Select asset categories for which you want to use this custom
+                field.{" "}
+                <Link
+                  to="https://www.shelf.nu/knowledge-base/linking-custom-fields-to-categories"
+                  target="_blank"
+                >
+                  Read more
+                </Link>
+              </p>
+            }
+          >
+            <div className="mb-3 flex gap-3">
+              <Switch
+                disabled={disabled}
+                checked={useCategories}
+                onCheckedChange={setUseCategories}
+              />
+              <div>
+                <label className="text-base font-medium text-gray-700">
+                  Use for select categories
+                </label>
+                <p className="text-[14px] text-gray-600">
+                  In case you only want to use this custom field for asset with
+                  certain categories.
+                </p>
+              </div>
+            </div>
+
+            {useCategories && (
+              <CategoriesInput
+                categories={categories}
+                name={(i) => zo.fields.categories(i)()}
+              />
+            )}
+          </FormRow>
+        </div>
 
         <div>
           <FormRow

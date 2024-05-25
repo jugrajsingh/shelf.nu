@@ -1,6 +1,6 @@
 import { isAuthApiError } from "@supabase/supabase-js";
 import type { AuthSession } from "server/session";
-import { getSupabaseAdmin } from "~/integrations/supabase";
+import { getSupabaseAdmin } from "~/integrations/supabase/client";
 import { SERVER_URL } from "~/utils/env";
 
 import type { ErrorLabel } from "~/utils/error";
@@ -325,12 +325,21 @@ export async function verifyOtpAndSignin(email: string, otp: string) {
 
     return mapAuthSession(session);
   } catch (cause) {
+    let message =
+      "Something went wrong. Please try again later or contact support.";
+    let shouldBeCaptured = true;
+
+    if (isAuthApiError(cause) && cause.message !== "") {
+      message = cause.message;
+      shouldBeCaptured = false;
+    }
+
     throw new ShelfError({
       cause,
-      message:
-        "Something went wrong. Please try again later or contact support.",
-      additionalData: { email },
+      message,
       label,
+      shouldBeCaptured,
+      additionalData: { email },
     });
   }
 }

@@ -13,22 +13,23 @@ import type { Zorm } from "react-zorm";
 import type { z } from "zod";
 import type { ShelfAssetCustomFieldValueType } from "~/modules/asset/types";
 import type { loader } from "~/routes/_layout+/assets.$assetId_.edit";
-import { isFormProcessing, tw } from "~/utils";
 import { getCustomFieldDisplayValue } from "~/utils/custom-fields";
+import { isFormProcessing } from "~/utils/form";
+import { tw } from "~/utils/tw";
 import { zodFieldIsRequired } from "~/utils/zod";
+import { Calendar } from "../forms/calendar-input";
+import FormRow from "../forms/form-row";
+import Input from "../forms/input";
 import {
   Select,
   SelectContent,
   SelectTrigger,
   SelectValue,
   SelectItem,
-} from "../forms";
-import { Calendar } from "../forms/calendar-input";
-import FormRow from "../forms/form-row";
-import Input from "../forms/input";
+} from "../forms/select";
 import { Switch } from "../forms/switch";
-import { SearchIcon } from "../icons";
-import { Button } from "../shared";
+import { SearchIcon } from "../icons/library";
+import { Button } from "../shared/button";
 
 export default function AssetCustomFields({
   zo,
@@ -215,7 +216,7 @@ export default function AssetCustomFields({
         })
       ) : (
         <div>
-          <div className=" mx-auto max-w-[640px] rounded-xl border border-gray-300 bg-white px-5 py-10 text-center">
+          <div className=" mx-auto max-w-screen-sm rounded-xl border border-gray-300 bg-white px-5 py-10 text-center">
             <div>
               <div className="mb-4 inline-flex items-center justify-center rounded-full border-8 border-solid border-gray-50 bg-gray-100 p-2 text-gray-600">
                 <SearchIcon />

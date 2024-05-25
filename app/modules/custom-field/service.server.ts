@@ -1,5 +1,5 @@
 import type { CustomField, Organization, Prisma, User } from "@prisma/client";
-import { db } from "~/database";
+import { db } from "~/database/db.server";
 import { getDefinitionFromCsvHeader } from "~/utils/custom-fields";
 import type { ErrorLabel } from "~/utils/error";
 import { ShelfError, maybeUniqueConstraintViolation } from "~/utils/error";
@@ -17,6 +17,7 @@ export async function createCustomField({
   active,
   userId,
   options = [],
+  categories = [],
 }: CustomFieldDraftPayload) {
   try {
     return await db.customField.create({
@@ -36,6 +37,9 @@ export async function createCustomField({
           connect: {
             id: userId,
           },
+        },
+        categories: {
+          connect: categories.map((category) => ({ id: category })),
         },
       },
     });
@@ -78,6 +82,7 @@ export async function getFilteredAndPaginatedCustomFields(params: {
         take,
         where,
         orderBy: [{ active: "desc" }, { updatedAt: "desc" }],
+        include: { categories: true },
       }),
 
       /** Count them */
@@ -104,6 +109,7 @@ export async function getCustomField({
   try {
     return await db.customField.findFirstOrThrow({
       where: { id, organizationId },
+      include: { categories: { select: { id: true } } },
     });
   } catch (cause) {
     throw new ShelfError({
@@ -125,8 +131,9 @@ export async function updateCustomField(payload: {
   required?: CustomField["required"];
   active?: CustomField["active"];
   options?: CustomField["options"];
+  categories?: string[];
 }) {
-  const { id, name, helpText, required, active, options } = payload;
+  const { id, name, helpText, required, active, options, categories } = payload;
 
   try {
     //dont ever update type
@@ -138,7 +145,10 @@ export async function updateCustomField(payload: {
       required,
       active,
       options,
-    };
+      categories: {
+        set: categories?.map((category) => ({ id: category })),
+      },
+    } satisfies Prisma.CustomFieldUpdateInput;
 
     return await db.customField.update({
       where: { id },
@@ -171,7 +181,6 @@ export async function upsertCustomField(
       });
 
       if (!existingCustomField) {
-        // @TODO not sure how to handle this case
         const newCustomField = await createCustomField(def);
         customFields[def.name] = newCustomField;
       } else {
@@ -269,14 +278,24 @@ export async function createCustomFieldsIfNotExists({
 
 export async function getActiveCustomFields({
   organizationId,
+  category,
 }: {
   organizationId: string;
+  category?: string | null;
 }) {
   try {
     return await db.customField.findMany({
       where: {
         organizationId,
-        active: true,
+        active: { equals: true },
+        ...(typeof category === "string"
+          ? {
+              OR: [
+                { categories: { none: {} } }, // Custom fields with no category
+                { categories: { some: { id: category } } },
+              ],
+            }
+          : { categories: { none: {} } }),
       },
     });
   } catch (cause) {

@@ -1,5 +1,5 @@
 import type { Organization, OrganizationType, User } from "@prisma/client";
-import { db } from "~/database";
+import { db } from "~/database/db.server";
 import type { ErrorLabel } from "~/utils/error";
 import { ShelfError } from "~/utils/error";
 import { isPersonalOrg } from "~/utils/organization";
@@ -9,7 +9,7 @@ import {
   canExportAssets,
   canImportAssets,
 } from "~/utils/subscription";
-import { countActiveCustomFields } from "../custom-field";
+import { countActiveCustomFields } from "../custom-field/service.server";
 
 const label: ErrorLabel = "Tier";
 
@@ -128,6 +128,7 @@ export const assertUserCanCreateMoreCustomFields = async ({
       message: "Your user cannot create more custom fields",
       additionalData: { organizationId },
       label,
+      shouldBeCaptured: false,
     });
   }
 };
@@ -252,13 +253,10 @@ export async function getOrganizationTierLimit({
   organizations,
 }: {
   organizationId?: string;
-  organizations: {
-    id: string;
-    type: OrganizationType;
-    name: string;
-    imageId: string | null;
-    userId: string;
-  }[];
+  organizations: Pick<
+    Organization,
+    "id" | "type" | "name" | "imageId" | "userId"
+  >[];
 }) {
   try {
     /** Find the current organization as we need the owner */

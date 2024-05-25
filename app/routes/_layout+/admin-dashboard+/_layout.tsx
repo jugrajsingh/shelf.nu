@@ -3,8 +3,8 @@ import { Link, Outlet, json } from "@remix-run/react";
 import { ErrorContent } from "~/components/errors";
 
 import HorizontalTabs from "~/components/layout/horizontal-tabs";
-import { data, error, makeShelfError } from "~/utils";
-
+import { makeShelfError } from "~/utils/error";
+import { data, error } from "~/utils/http.server";
 import { requireAdmin } from "~/utils/roles.server";
 
 export async function loader({ context }: LoaderFunctionArgs) {
@@ -27,6 +27,7 @@ export const handle = {
 
 const items = [
   { to: "users", content: "Users" },
+  { to: "qrs", content: "QR codes" },
   { to: "announcements", content: "Announcements" },
 ];
 

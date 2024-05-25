@@ -5,30 +5,28 @@ import { PrismaClientKnownRequestError } from "@prisma/client/runtime/library";
 import type { LoaderFunctionArgs } from "@remix-run/node";
 import sharp from "sharp";
 import type { AuthSession } from "server/session";
-import type { ExtendedPrismaClient } from "~/database";
-import { db } from "~/database";
+import type { ExtendedPrismaClient } from "~/database/db.server";
+import { db } from "~/database/db.server";
 
 import {
   deleteAuthAccount,
   createEmailAuthAccount,
   signInWithEmail,
   updateAccountPassword,
-} from "~/modules/auth";
+} from "~/modules/auth/service.server";
 
-import {
-  dateTimeInUnix,
-  getCurrentSearchParams,
-  getParamsValues,
-  randomUsernameFromEmail,
-} from "~/utils";
+import { dateTimeInUnix } from "~/utils/date-time-in-unix";
 import type { ErrorLabel } from "~/utils/error";
 import { ShelfError, isLikeShelfError } from "~/utils/error";
 import type { ValidationError } from "~/utils/http";
+import { getCurrentSearchParams } from "~/utils/http.server";
+import { getParamsValues } from "~/utils/list";
 import {
   deleteProfilePicture,
   getPublicFileURL,
   parseFileFormData,
 } from "~/utils/storage.server";
+import { randomUsernameFromEmail } from "~/utils/user";
 import type { UpdateUserPayload } from "./types";
 import { defaultUserCategories } from "../category/default-categories";
 
@@ -217,6 +215,10 @@ export async function createUser(
           organizationIds.push(organizationId);
         }
 
+        /** Create user organization association
+         * 1. For the personal org
+         * 2. For the org that the user is being attached to
+         */
         await Promise.all([
           createUserOrgAssociation(tx, {
             userId: user.id,
@@ -422,25 +424,19 @@ export async function updateProfilePicture({
 
     const profilePicture = fileData.get("profile-picture") as string;
 
-    /** if profile picture is an empty string, the upload failed so we return an error */
-    if (!profilePicture || profilePicture === "") {
-      throw new ShelfError({
-        cause: null,
-        message: "There is no profile picture to upload",
-        additionalData: { userId },
-        label,
-      });
-    }
-
-    if (previousProfilePictureUrl) {
-      /** Delete the old picture  */
+    /**
+     * Delete the old image, if a new one was uploaded
+     */
+    if (profilePicture && previousProfilePictureUrl) {
       await deleteProfilePicture({ url: previousProfilePictureUrl });
     }
 
     /** Update user with new picture */
     return await updateUser({
       id: userId,
-      profilePicture: getPublicFileURL({ filename: profilePicture }),
+      profilePicture: profilePicture
+        ? getPublicFileURL({ filename: profilePicture })
+        : undefined,
     });
   } catch (cause) {
     throw new ShelfError({

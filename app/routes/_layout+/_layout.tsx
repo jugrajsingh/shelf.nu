@@ -10,19 +10,22 @@ import Sidebar from "~/components/layout/sidebar/sidebar";
 import { useCrisp } from "~/components/marketing/crisp";
 import { Spinner } from "~/components/shared/spinner";
 import { Toaster } from "~/components/shared/toast";
+import { NoSubscription } from "~/components/subscription/no-subscription";
 import { config } from "~/config/shelf.config";
-import { db } from "~/database";
+import { db } from "~/database/db.server";
 import { getSelectedOrganisation } from "~/modules/organization/context.server";
-import styles from "~/styles/layout/index.css";
-import { ShelfError, data, error, makeShelfError } from "~/utils";
+import styles from "~/styles/layout/index.css?url";
 import {
   initializePerPageCookieOnLayout,
   setCookie,
   userPrefs,
 } from "~/utils/cookies.server";
+import { ShelfError, makeShelfError } from "~/utils/error";
+import { data, error } from "~/utils/http.server";
 import type { CustomerWithSubscriptions } from "~/utils/stripe.server";
 
 import {
+  disabledTeamOrg,
   getCustomerActiveSubscription,
   getStripeCustomer,
   stripe,
@@ -114,6 +117,11 @@ export async function loader({ context, request }: LoaderFunctionArgs) {
         minimizedSidebar: cookie.minimizedSidebar,
         isAdmin: user?.roles.some((role) => role.name === Roles["ADMIN"]),
         canUseBookings: canUseBookings(currentOrganization),
+        /** THis is used to disable team organizations when the currentOrg is Team and no subscription is present  */
+        disabledTeamOrg: await disabledTeamOrg({
+          currentOrganization,
+          organizations,
+        }),
       }),
       {
         headers: [setCookie(await userPrefs.serialize(cookie))],
@@ -127,7 +135,8 @@ export async function loader({ context, request }: LoaderFunctionArgs) {
 
 export default function App() {
   useCrisp();
-  const { currentOrganizationId } = useLoaderData<typeof loader>();
+  const { currentOrganizationId, disabledTeamOrg } =
+    useLoaderData<typeof loader>();
   const [workspaceSwitching] = useAtom(switchingWorkspaceAtom);
 
   return (
@@ -141,7 +150,9 @@ export default function App() {
           <Sidebar />
           <main className=" flex-1 bg-gray-25 px-4 pb-6 md:w-[calc(100%-312px)]">
             <div className="flex h-full flex-1 flex-col">
-              {workspaceSwitching ? (
+              {disabledTeamOrg ? (
+                <NoSubscription />
+              ) : workspaceSwitching ? (
                 <div className="flex size-full flex-col items-center justify-center text-center">
                   <Spinner />
                   <p className="mt-2">Activating workspace...</p>

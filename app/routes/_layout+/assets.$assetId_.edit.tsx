@@ -18,18 +18,10 @@ import {
   getAsset,
   updateAsset,
   updateAssetMainImage,
-} from "~/modules/asset";
+} from "~/modules/asset/service.server";
 
-import { getActiveCustomFields } from "~/modules/custom-field";
-import { buildTagsSet } from "~/modules/tag";
-import {
-  assertIsPost,
-  data,
-  error,
-  getParams,
-  parseData,
-  slugify,
-} from "~/utils";
+import { getActiveCustomFields } from "~/modules/custom-field/service.server";
+import { buildTagsSet } from "~/modules/tag/service.server";
 import { appendToMetaTitle } from "~/utils/append-to-meta-title";
 import {
   extractCustomFieldValuesFromPayload,
@@ -37,8 +29,20 @@ import {
 } from "~/utils/custom-fields";
 import { sendNotification } from "~/utils/emitter/send-notification.server";
 import { makeShelfError } from "~/utils/error";
-import { PermissionAction, PermissionEntity } from "~/utils/permissions";
+import {
+  assertIsPost,
+  data,
+  error,
+  getCurrentSearchParams,
+  getParams,
+  parseData,
+} from "~/utils/http.server";
+import {
+  PermissionAction,
+  PermissionEntity,
+} from "~/utils/permissions/permission.validator.server";
 import { requirePermission } from "~/utils/roles.server";
+import { slugify } from "~/utils/slugify";
 
 export async function loader({ context, request, params }: LoaderFunctionArgs) {
   const authSession = context.getSession();
@@ -57,20 +61,21 @@ export async function loader({ context, request, params }: LoaderFunctionArgs) {
 
     const asset = await getAsset({ organizationId, id });
 
-    const {
-      categories,
-      totalCategories,
-      tags,
-      locations,
-      totalLocations,
-      customFields,
-    } = await getAllEntriesForCreateAndEdit({
-      request,
+    const { categories, totalCategories, tags, locations, totalLocations } =
+      await getAllEntriesForCreateAndEdit({
+        request,
+        organizationId,
+        defaults: {
+          category: asset.categoryId,
+          location: asset.locationId,
+        },
+      });
+
+    const searchParams = getCurrentSearchParams(request);
+
+    const customFields = await getActiveCustomFields({
       organizationId,
-      defaults: {
-        category: asset.categoryId,
-        location: asset.locationId,
-      },
+      category: searchParams.get("category") ?? asset.categoryId,
     });
 
     const header: HeaderData = {
@@ -126,8 +131,12 @@ export async function action({ context, request, params }: ActionFunctionArgs) {
     const clonedRequest = request.clone();
     const formData = await clonedRequest.formData();
 
+    const searchParams = getCurrentSearchParams(request);
+
     const customFields = await getActiveCustomFields({
       organizationId,
+      category:
+        searchParams.get("category") ?? String(formData.get("category")),
     });
 
     const FormSchema = mergedSchema({
@@ -174,7 +183,7 @@ export async function action({ context, request, params }: ActionFunctionArgs) {
       id,
       title,
       description,
-      categoryId: category,
+      categoryId: category ? category : "uncategorized",
       tags,
       newLocationId,
       currentLocationId,

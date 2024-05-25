@@ -14,23 +14,21 @@ import {
 } from "~/components/custom-fields/form";
 import Header from "~/components/layout/header";
 import type { HeaderData } from "~/components/layout/header/types";
+import { getAllEntriesForCreateAndEdit } from "~/modules/asset/service.server";
 import {
   countActiveCustomFields,
   getCustomField,
   updateCustomField,
-} from "~/modules/custom-field";
-import { getOrganizationTierLimit } from "~/modules/tier";
-import {
-  ShelfError,
-  data,
-  error,
-  getParams,
-  makeShelfError,
-  parseData,
-} from "~/utils";
+} from "~/modules/custom-field/service.server";
+import { getOrganizationTierLimit } from "~/modules/tier/service.server";
 import { appendToMetaTitle } from "~/utils/append-to-meta-title";
 import { sendNotification } from "~/utils/emitter/send-notification.server";
-import { PermissionAction, PermissionEntity } from "~/utils/permissions";
+import { makeShelfError, ShelfError } from "~/utils/error";
+import { data, error, getParams, parseData } from "~/utils/http.server";
+import {
+  PermissionAction,
+  PermissionEntity,
+} from "~/utils/permissions/permission.validator.server";
 import { requirePermission } from "~/utils/roles.server";
 import { canCreateMoreCustomFields } from "~/utils/subscription";
 
@@ -51,6 +49,14 @@ export async function loader({ context, request, params }: LoaderFunctionArgs) {
 
     const customField = await getCustomField({ organizationId, id });
 
+    const { categories, totalCategories } = await getAllEntriesForCreateAndEdit(
+      {
+        organizationId,
+        request,
+        defaults: { category: customField.categories.map((c) => c.id) },
+      }
+    );
+
     const header: HeaderData = {
       title: `Edit | ${customField.name}`,
     };
@@ -59,6 +65,8 @@ export async function loader({ context, request, params }: LoaderFunctionArgs) {
       data({
         customField,
         header,
+        categories,
+        totalCategories,
       })
     );
   } catch (cause) {
@@ -95,7 +103,7 @@ export async function action({ context, request, params }: ActionFunctionArgs) {
       NewCustomFieldFormSchema
     );
 
-    const { name, helpText, active, required, options } = payload;
+    const { name, helpText, active, required, options, categories } = payload;
 
     /** If they are activating a field, we have to make sure that they are not already at the limit */
     if (active) {
@@ -143,6 +151,7 @@ export async function action({ context, request, params }: ActionFunctionArgs) {
       active,
       required,
       options,
+      categories,
     });
 
     sendNotification({
@@ -180,6 +189,7 @@ export default function CustomFieldEditPage() {
           type={customField.type}
           active={customField.active}
           options={customField.options}
+          categories={customField.categories.map((c) => c.id)}
         />
       </div>
     </>

@@ -13,17 +13,18 @@ import { z } from "zod";
 import { updateDynamicTitleAtom } from "~/atoms/dynamic-title-atom";
 import { fileErrorAtom, validateFileAtom } from "~/atoms/file";
 import type { loader } from "~/routes/_layout+/assets.$assetId_.edit";
-import { isFormProcessing, tw } from "~/utils";
-
 import type { CustomFieldZodSchema } from "~/utils/custom-fields";
 import { mergedSchema } from "~/utils/custom-fields";
+import { isFormProcessing } from "~/utils/form";
+import { tw } from "~/utils/tw";
+
 import { zodFieldIsRequired } from "~/utils/zod";
 import AssetCustomFields from "./custom-fields-inputs";
 import DynamicSelect from "../dynamic-select/dynamic-select";
 import FormRow from "../forms/form-row";
 import Input from "../forms/input";
 import { AbsolutePositionedHeaderActions } from "../layout/header/absolute-positioned-header-actions";
-import { Button } from "../shared";
+import { Button } from "../shared/button";
 import { ButtonGroup } from "../shared/button-group";
 import { Card } from "../shared/card";
 import { Image } from "../shared/image";
@@ -118,7 +119,7 @@ export const AssetForm = ({
   }>();
 
   return (
-    <Card className="md:w-min">
+    <Card className="w-full md:w-min">
       <Form
         ref={zo.ref}
         method="post"
@@ -229,10 +230,13 @@ export const AssetForm = ({
           <DynamicSelect
             disabled={disabled}
             defaultValue={category ?? undefined}
-            model={{ name: "category", key: "name" }}
+            model={{ name: "category", queryKey: "name" }}
             label="Categories"
             initialDataKey="categories"
             countKey="totalCategories"
+            closeOnSelect
+            selectionMode="set"
+            allowClear
             extraContent={
               <Button
                 to="/categories/new"
@@ -285,10 +289,12 @@ export const AssetForm = ({
             disabled={disabled}
             fieldName="newLocationId"
             defaultValue={location || undefined}
-            model={{ name: "location", key: "name" }}
+            model={{ name: "location", queryKey: "name" }}
             label="Locations"
             initialDataKey="locations"
             countKey="totalLocations"
+            closeOnSelect
+            allowClear
             extraContent={
               <Button
                 to="/locations/new"

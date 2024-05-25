@@ -10,25 +10,38 @@ import type {
   Organization,
   TeamMember,
   Booking,
+  Kit,
 } from "@prisma/client";
 import { AssetStatus, BookingStatus, ErrorCorrection } from "@prisma/client";
 import type { LoaderFunctionArgs } from "@remix-run/node";
-import { db } from "~/database";
-import { getSupabaseAdmin } from "~/integrations/supabase";
-import type { AllowedModelNames } from "~/routes/api+/model-filters";
+import { db } from "~/database/db.server";
+import { getSupabaseAdmin } from "~/integrations/supabase/client";
+import { createCategoriesIfNotExists } from "~/modules/category/service.server";
 import {
-  dateTimeInUnix,
-  getCurrentSearchParams,
-  getParamsValues,
-  oneDayFromNow,
-} from "~/utils";
+  createCustomFieldsIfNotExists,
+  upsertCustomField,
+} from "~/modules/custom-field/service.server";
+import type { CustomFieldDraftPayload } from "~/modules/custom-field/types";
+import { createLocationsIfNotExists } from "~/modules/location/service.server";
+import { getQr } from "~/modules/qr/service.server";
+import { createTagsIfNotExists } from "~/modules/tag/service.server";
+import {
+  createTeamMemberIfNotExists,
+  getTeamMemberForCustodianFilter,
+} from "~/modules/team-member/service.server";
+import type { AllowedModelNames } from "~/routes/api+/model-filters";
+
 import { updateCookieWithPerPage } from "~/utils/cookies.server";
 import {
   buildCustomFieldValue,
   getDefinitionFromCsvHeader,
 } from "~/utils/custom-fields";
+import { dateTimeInUnix } from "~/utils/date-time-in-unix";
 import type { ErrorLabel } from "~/utils/error";
 import { ShelfError, maybeUniqueConstraintViolation } from "~/utils/error";
+import { getCurrentSearchParams } from "~/utils/http.server";
+import { getParamsValues } from "~/utils/list";
+import { oneDayFromNow } from "~/utils/one-week-from-now";
 import { createSignedUrl, parseFileFormData } from "~/utils/storage.server";
 
 import type {
@@ -37,31 +50,18 @@ import type {
   ShelfAssetCustomFieldValueType,
   UpdateAssetPayload,
 } from "./types";
-import { createCategoriesIfNotExists } from "../category";
-
-import {
-  createCustomFieldsIfNotExists,
-  upsertCustomField,
-} from "../custom-field";
-import type { CustomFieldDraftPayload } from "../custom-field/types";
-import { createLocationsIfNotExists } from "../location";
-import { getQr } from "../qr";
-import { createTagsIfNotExists } from "../tag";
-import { createTeamMemberIfNotExists } from "../team-member";
 
 const label: ErrorLabel = "Assets";
 
 export async function getAsset({
   organizationId,
-  userId,
   id,
 }: Pick<Asset, "id"> & {
   organizationId?: Organization["id"];
-  userId?: User["id"];
 }) {
   try {
     return await db.asset.findFirstOrThrow({
-      where: { id, organizationId, userId },
+      where: { id, organizationId },
       include: {
         category: true,
         notes: {
@@ -103,10 +103,12 @@ export async function getAsset({
                 helpText: true,
                 required: true,
                 type: true,
+                categories: true,
               },
             },
           },
         },
+        kit: { select: { id: true, name: true, status: true } },
       },
     });
   } catch (cause) {
@@ -115,7 +117,7 @@ export async function getAsset({
       title: "Asset not found",
       message:
         "The asset you are trying to access does not exist or you do not have permission to access it.",
-      additionalData: { id, organizationId, userId },
+      additionalData: { id, organizationId },
       label,
     });
   }
@@ -140,6 +142,7 @@ async function getAssetsFromView(params: {
   bookingTo?: Booking["to"];
   unhideAssetsBookigIds?: Booking["id"][];
   locationIds?: Location["id"][] | null;
+  teamMemberIds?: TeamMember["id"][] | null;
 }) {
   const {
     organizationId,
@@ -154,6 +157,7 @@ async function getAssetsFromView(params: {
     hideUnavailable,
     unhideAssetsBookigIds, // works in conjuction with hideUnavailable, to show currentbooking assets
     locationIds,
+    teamMemberIds,
   } = params;
 
   try {
@@ -263,6 +267,36 @@ async function getAssetsFromView(params: {
       };
     }
 
+    if (teamMemberIds && teamMemberIds.length && where.asset) {
+      where.asset.OR = [
+        ...(where.asset.OR ?? []),
+        {
+          custody: { teamMemberId: { in: teamMemberIds } },
+        },
+        {
+          bookings: {
+            some: {
+              custodianTeamMemberId: { in: teamMemberIds },
+              status: {
+                in: ["ONGOING", "OVERDUE"], // Only get bookings that are ongoing or overdue as those are the only states when the asset is actually in custody
+              },
+            },
+          },
+        },
+        {
+          bookings: {
+            some: {
+              custodianUserId: { in: teamMemberIds },
+              status: {
+                in: ["ONGOING", "OVERDUE"],
+              },
+            },
+          },
+        },
+        { custody: { custodian: { userId: { in: teamMemberIds } } } },
+      ];
+    }
+
     const [assetSearch, totalAssets] = await Promise.all([
       /** Get the assets */
       db.assetSearchView.findMany({
@@ -272,6 +306,7 @@ async function getAssetsFromView(params: {
         include: {
           asset: {
             include: {
+              kit: true,
               category: true,
               tags: true,
               location: {
@@ -352,12 +387,14 @@ async function getAssets(params: {
   perPage?: number;
   search?: string | null;
   categoriesIds?: Category["id"][] | null;
+  locationIds?: Location["id"][] | null;
   tagsIds?: Tag["id"][] | null;
   status?: Asset["status"] | null;
   hideUnavailable?: Asset["availableToBook"];
   bookingFrom?: Booking["from"];
   bookingTo?: Booking["to"];
   unhideAssetsBookigIds?: Booking["id"][];
+  teamMemberIds?: TeamMember["id"][] | null;
 }) {
   const {
     organizationId,
@@ -365,17 +402,19 @@ async function getAssets(params: {
     perPage = 8,
     search,
     categoriesIds,
+    locationIds,
     tagsIds,
     status,
     bookingFrom,
     bookingTo,
     hideUnavailable,
     unhideAssetsBookigIds, // works in conjuction with hideUnavailable, to show currentbooking assets
+    teamMemberIds,
   } = params;
 
   try {
     const skip = page > 1 ? (page - 1) * perPage : 0;
-    const take = perPage >= 1 && perPage <= 100 ? perPage : 20; // min 1 and max 25 per page
+    const take = perPage >= 1 && perPage <= 100 ? perPage : 20; // min 1 and max 100 per page
 
     /** Default value of where. Takes the assetss belonging to current user */
     let where: Prisma.AssetWhereInput = { organizationId };
@@ -467,6 +506,26 @@ async function getAssets(params: {
       };
     }
 
+    if (locationIds && locationIds.length > 0) {
+      where.location = {
+        id: { in: locationIds },
+      };
+    }
+
+    if (teamMemberIds && teamMemberIds.length) {
+      where.OR = [
+        ...(where.OR ?? []),
+        {
+          custody: { teamMemberId: { in: teamMemberIds } },
+        },
+        { custody: { custodian: { userId: { in: teamMemberIds } } } },
+        {
+          bookings: { some: { custodianTeamMemberId: { in: teamMemberIds } } },
+        },
+        { bookings: { some: { custodianUserId: { in: teamMemberIds } } } },
+      ];
+    }
+
     const [assets, totalAssets] = await Promise.all([
       /** Get the assets */
       db.asset.findMany({
@@ -474,6 +533,7 @@ async function getAssets(params: {
         take,
         where,
         include: {
+          kit: true,
           category: true,
           tags: true,
           location: {
@@ -1118,7 +1178,7 @@ export async function getAllEntriesForCreateAndEdit({
   organizationId: Organization["id"];
   request: LoaderFunctionArgs["request"];
   defaults?: {
-    category?: string | null;
+    category?: string | string[] | null;
     tag?: string | null;
     location?: string | null;
   };
@@ -1139,14 +1199,25 @@ export async function getAllEntriesForCreateAndEdit({
       locationExcludedSelected,
       selectedLocation,
       totalLocations,
-      customFields,
     ] = await Promise.all([
       /** Get the categories */
       db.category.findMany({
-        where: { organizationId, id: { not: categorySelected } },
+        where: {
+          organizationId,
+          id: Array.isArray(categorySelected)
+            ? { notIn: categorySelected }
+            : { not: categorySelected },
+        },
         take: getAllEntries.includes("category") ? undefined : 12,
       }),
-      db.category.findMany({ where: { organizationId, id: categorySelected } }),
+      db.category.findMany({
+        where: {
+          organizationId,
+          id: Array.isArray(categorySelected)
+            ? { in: categorySelected }
+            : categorySelected,
+        },
+      }),
       db.category.count({ where: { organizationId } }),
 
       /** Get the tags */
@@ -1159,11 +1230,6 @@ export async function getAllEntriesForCreateAndEdit({
       }),
       db.location.findMany({ where: { organizationId, id: locationSelected } }),
       db.location.count({ where: { organizationId } }),
-
-      /** Get the custom fields */
-      db.customField.findMany({
-        where: { organizationId, active: { equals: true } },
-      }),
     ]);
 
     return {
@@ -1172,7 +1238,6 @@ export async function getAllEntriesForCreateAndEdit({
       tags,
       locations: [...selectedLocation, ...locationExcludedSelected],
       totalLocations,
-      customFields,
     };
   } catch (cause) {
     throw new ShelfError({
@@ -1200,6 +1265,7 @@ export async function getPaginatedAndFilterableAssets({
 }: {
   request: LoaderFunctionArgs["request"];
   organizationId: Organization["id"];
+  kitId?: Prisma.AssetWhereInput["kitId"];
   extraInclude?: Prisma.AssetInclude;
   excludeCategoriesQuery?: boolean;
   excludeTagsQuery?: boolean;
@@ -1228,6 +1294,7 @@ export async function getPaginatedAndFilterableAssets({
     hideUnavailable,
     unhideAssetsBookigIds,
     locationIds,
+    teamMemberIds,
   } = paramsValues;
 
   const cookie = await updateCookieWithPerPage(request, perPageParam);
@@ -1244,6 +1311,7 @@ export async function getPaginatedAndFilterableAssets({
       locationExcludedSelected,
       selectedLocations,
       totalLocations,
+      teamMembersData,
     ] = await Promise.all([
       db.category.findMany({
         where: { organizationId, id: { notIn: categoriesIds } },
@@ -1270,6 +1338,12 @@ export async function getPaginatedAndFilterableAssets({
         where: { organizationId, id: { in: locationIds } },
       }),
       db.location.count({ where: { organizationId } }),
+      // team members/custodian
+      getTeamMemberForCustodianFilter({
+        organizationId,
+        selectedTeamMembers: teamMemberIds,
+        getAll: getAllEntries.includes("teamMember"),
+      }),
     ]);
 
     let getFunction = getAssetsFromView;
@@ -1290,6 +1364,7 @@ export async function getPaginatedAndFilterableAssets({
       hideUnavailable,
       unhideAssetsBookigIds,
       locationIds,
+      teamMemberIds,
     });
     const totalPages = Math.ceil(totalAssets / perPage);
 
@@ -1311,6 +1386,7 @@ export async function getPaginatedAndFilterableAssets({
         ? []
         : [...selectedLocations, ...locationExcludedSelected],
       totalLocations,
+      ...teamMembersData,
     };
   } catch (cause) {
     throw new ShelfError({
@@ -1937,6 +2013,190 @@ export async function updateAssetsWithBookingCustodians<T extends Asset>(
       cause,
       message: "Fail to update assets with booking custodians",
       additionalData: { assets },
+      label,
+    });
+  }
+}
+
+export async function updateAssetQrCode({
+  assetId,
+  newQrId,
+  organizationId,
+}: {
+  organizationId: string;
+  assetId: string;
+  newQrId: string;
+}) {
+  // Disconnect all existing QR codes
+  try {
+    // Disconnect all existing QR codes
+    await db.asset
+      .update({
+        where: { id: assetId },
+        data: {
+          qrCodes: {
+            set: [],
+          },
+        },
+      })
+      .catch((cause) => {
+        throw new ShelfError({
+          cause,
+          message: "Couldn't disconnect existing codes",
+          label,
+          additionalData: { assetId, organizationId, newQrId },
+        });
+      });
+
+    // Connect the new QR code
+    return await db.asset
+      .update({
+        where: { id: assetId },
+        data: {
+          qrCodes: {
+            connect: { id: newQrId },
+          },
+        },
+      })
+      .catch((cause) => {
+        throw new ShelfError({
+          cause,
+          message: "Couldn't connect the new QR code",
+          label,
+          additionalData: { assetId, organizationId, newQrId },
+        });
+      });
+  } catch (cause) {
+    throw new ShelfError({
+      cause,
+      message: "Something went wrong while updating asset QR code",
+      label,
+      additionalData: { assetId, organizationId, newQrId },
+    });
+  }
+}
+
+export async function createBulkKitChangeNotes({
+  newlyAddedAssets,
+  removedAssets,
+  userId,
+  kit,
+}: {
+  newlyAddedAssets: Prisma.AssetGetPayload<{
+    select: { id: true; title: true; kit: true };
+  }>[];
+  removedAssets: Prisma.AssetGetPayload<{
+    select: { id: true; title: true; kit: true };
+  }>[];
+  userId: User["id"];
+  kit: Kit;
+}) {
+  try {
+    const user = await db.user
+      .findFirstOrThrow({
+        where: { id: userId },
+        select: { firstName: true, lastName: true },
+      })
+      .catch((cause) => {
+        throw new ShelfError({
+          cause,
+          message: "User not found",
+          additionalData: { userId },
+          label,
+        });
+      });
+
+    for (const asset of [...newlyAddedAssets, ...removedAssets]) {
+      const isAssetRemoved = removedAssets.some((a) => a.id === asset.id);
+      const isNewlyAdded = newlyAddedAssets.some((a) => a.id === asset.id);
+      const newKit = isAssetRemoved ? null : kit;
+      const currentKit = asset.kit ? asset.kit : null;
+
+      if (isNewlyAdded || isAssetRemoved) {
+        await createKitChangeNote({
+          currentKit,
+          newKit,
+          firstName: user.firstName ?? "",
+          lastName: user.lastName ?? "",
+          assetName: asset.title,
+          assetId: asset.id,
+          userId,
+          isRemoving: isAssetRemoved,
+        });
+      }
+    }
+  } catch (cause) {
+    throw new ShelfError({
+      cause,
+      message: "Something went wrong while creating bulk kit change notes",
+      additionalData: {
+        userId,
+        newlyAddedAssetsIds: newlyAddedAssets.map((a) => a.id),
+        removedAssetsIds: removedAssets.map((a) => a.id),
+      },
+      label,
+    });
+  }
+}
+
+export async function createKitChangeNote({
+  currentKit,
+  newKit,
+  firstName,
+  lastName,
+  assetName,
+  assetId,
+  userId,
+  isRemoving,
+}: {
+  currentKit: Pick<Kit, "id" | "name"> | null;
+  newKit: Pick<Kit, "id" | "name"> | null;
+  firstName: string;
+  lastName: string;
+  assetName: Asset["title"];
+  assetId: Asset["id"];
+  userId: User["id"];
+  isRemoving: boolean;
+}) {
+  try {
+    const fullName = `${firstName.trim()} ${lastName.trim()}`;
+    let message = "";
+
+    /** User is changing from kit to another */
+    if (currentKit && newKit && currentKit.id !== newKit.id) {
+      message = `**${fullName}** changed kit of **${assetName.trim()}** from **[${currentKit.name.trim()}](/kits/${
+        currentKit.id
+      })** to **[${newKit.name.trim()}](/kits/${newKit.id})**`;
+    }
+
+    /** User is adding asset to a kit for first time */
+    if (newKit && !currentKit) {
+      message = `**${fullName}** added asset to **[${newKit.name.trim()}](/kits/${
+        newKit.id
+      })**`;
+    }
+
+    /** User is removing the asset from kit */
+    if (isRemoving && !newKit) {
+      message = `**${fullName}** removed asset from **[${currentKit?.name.trim()}](/kits/${currentKit?.id})**`;
+    }
+
+    if (!message) {
+      return;
+    }
+
+    await createNote({
+      content: message,
+      type: "UPDATE",
+      userId,
+      assetId,
+    });
+  } catch (cause) {
+    throw new ShelfError({
+      cause,
+      message:
+        "Something went wrong while creating a kit change note. Please try again or contact support",
+      additionalData: { userId, assetId },
       label,
     });
   }

@@ -9,6 +9,7 @@ import {
 } from "@remix-run/react";
 import { useZorm } from "react-zorm";
 import z from "zod";
+import Input from "~/components/forms/input";
 import {
   Select,
   SelectGroup,
@@ -17,28 +18,26 @@ import {
   SelectLabel,
   SelectValue,
   SelectTrigger,
-} from "~/components/forms";
-import Input from "~/components/forms/input";
-import { UserIcon } from "~/components/icons";
-import { Button } from "~/components/shared";
+} from "~/components/forms/select";
+import { UserIcon } from "~/components/icons/library";
+import { Button } from "~/components/shared/button";
 import { Image } from "~/components/shared/image";
-import { db } from "~/database";
+import { db } from "~/database/db.server";
 import { useCurrentOrganization } from "~/hooks/use-current-organization-id";
-import { createInvite } from "~/modules/invite";
-import { assertUserCanInviteUsersToWorkspace } from "~/modules/tier";
-import styles from "~/styles/layout/custom-modal.css";
-import {
-  data,
-  error,
-  isFormProcessing,
-  parseData,
-  tw,
-  validEmail,
-} from "~/utils";
+import { createInvite } from "~/modules/invite/service.server";
+import { assertUserCanInviteUsersToWorkspace } from "~/modules/tier/service.server";
+import styles from "~/styles/layout/custom-modal.css?url";
 import { sendNotification } from "~/utils/emitter/send-notification.server";
 import { ShelfError, makeShelfError } from "~/utils/error";
-import { PermissionAction, PermissionEntity } from "~/utils/permissions";
+import { isFormProcessing } from "~/utils/form";
+import { data, error, parseData } from "~/utils/http.server";
+import { validEmail } from "~/utils/misc";
+import {
+  PermissionAction,
+  PermissionEntity,
+} from "~/utils/permissions/permission.validator.server";
 import { requirePermission } from "~/utils/roles.server";
+import { tw } from "~/utils/tw";
 import type { UserFriendlyRoles } from "./settings.team";
 
 const InviteUserFormSchema = z.object({
@@ -203,7 +202,7 @@ export default function InviteUser() {
                         className={tw("size-6 rounded-[2px] object-cover")}
                       />
 
-                      <div className=" ml-[1px] text-sm text-gray-900">
+                      <div className=" ml-px text-sm text-gray-900">
                         {organization.name}
                       </div>
                     </div>
@@ -215,9 +214,9 @@ export default function InviteUser() {
 
           <SelectGroup>
             <SelectLabel className="pl-0">Role</SelectLabel>
-            <Select name="role" defaultValue={OrganizationRoles.ADMIN}>
+            <Select name="role">
               <SelectTrigger>
-                <SelectValue />
+                <SelectValue placeholder="Select user role" />
               </SelectTrigger>
               <SelectContent
                 position="popper"
@@ -228,7 +227,7 @@ export default function InviteUser() {
                   {Object.entries(organizationRolesMap).map(([k, v]) => (
                     <SelectItem value={k} key={k} className="p-2">
                       <div className="flex items-center gap-2">
-                        <div className=" ml-[1px] block text-sm lowercase text-gray-900 first-letter:uppercase">
+                        <div className=" ml-px block text-sm lowercase text-gray-900 first-letter:uppercase">
                           {v}
                         </div>
                       </div>

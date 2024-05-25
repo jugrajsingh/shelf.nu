@@ -2,10 +2,11 @@ import type { ChangeEvent } from "react";
 import { useRef, useState } from "react";
 import { useFetcher } from "@remix-run/react";
 import type { action } from "~/routes/_layout+/assets.import";
-import { isFormProcessing, tw } from "~/utils";
+import { isFormProcessing } from "~/utils/form";
+import { tw } from "~/utils/tw";
 import Input from "../forms/input";
 import { CrispButton } from "../marketing/crisp";
-import { Button } from "../shared";
+import { Button } from "../shared/button";
 import {
   AlertDialog,
   AlertDialogCancel,
@@ -172,9 +173,9 @@ export const FileForm = ({ intent, url }: { intent: string; url?: string }) => {
               </>
             ) : null}
           </AlertDialogHeader>
-          {fetcher.data?.error ? (
+          {data?.error ? (
             <div>
-              <b className="text-red-500">{fetcher.data.error.message}</b>
+              <b className="text-red-500">{data.error.message}</b>
               <p>
                 Please fix your CSV file and try again. If the issue persists,
                 don't hesitate to get in touch with us.
