@@ -1,10 +1,11 @@
-import type { Asset } from "@prisma/client";
-import { useLoaderData } from "@remix-run/react";
+import type { Asset, Category } from "@prisma/client";
+import { useLoaderData } from "react-router";
 import type { loader } from "~/routes/_layout+/dashboard";
 import { EmptyState } from "./empty-state";
-import { AssetImage } from "../assets/asset-image";
+import { AssetImage } from "../assets/asset-image/component";
 import { AssetStatusBadge } from "../assets/asset-status-badge";
-import { Badge } from "../shared/badge";
+import { CategoryBadge } from "../assets/category-badge";
+import { Button } from "../shared/button";
 import { InfoTooltip } from "../shared/info-tooltip";
 import { Td, Table, Tr } from "../table";
 
@@ -37,6 +38,13 @@ export default function NewestAssets() {
                 <Row
                   item={{
                     ...asset,
+                    category: asset?.category
+                      ? {
+                          id: asset.category.id,
+                          name: asset.category?.name || "Uncategorized",
+                          color: asset.category?.color || "#575757",
+                        }
+                      : null,
                     mainImageExpiration: asset.mainImageExpiration
                       ? new Date(asset.mainImageExpiration)
                       : null,
@@ -69,10 +77,7 @@ const Row = ({
   item,
 }: {
   item: Asset & {
-    category?: {
-      color: string;
-      name: string;
-    } | null;
+    category: Pick<Category, "id" | "name" | "color"> | null;
   };
 }) => {
   const { category } = item;
@@ -82,23 +87,34 @@ const Row = ({
       <Td className="w-full whitespace-normal p-0 md:p-0">
         <div className="flex justify-between gap-3 px-4 py-3 md:justify-normal md:px-6">
           <div className="flex items-center gap-3">
-            <div className="flex size-12 shrink-0 items-center justify-center">
+            <div className="flex size-14 shrink-0 items-center justify-center">
               <AssetImage
                 asset={{
-                  assetId: item.id,
+                  id: item.id,
                   mainImage: item.mainImage,
+                  thumbnailImage: item.thumbnailImage,
                   mainImageExpiration: item.mainImageExpiration,
-                  alt: item.title,
                 }}
+                alt={`Image of ${item.title}`}
                 className="size-full rounded-[4px] border object-cover"
+                withPreview
               />
             </div>
             <div className="min-w-[130px]">
-              <span className="word-break mb-1 block font-medium">
-                {item.title}
+              <span className="word-break mb-1 block">
+                <Button
+                  to={`/assets/${item.id}`}
+                  variant="link"
+                  className="text-left font-medium text-gray-900 hover:text-gray-700"
+                  target={"_blank"}
+                  onlyNewTabIconOnHover={true}
+                >
+                  {item.title}
+                </Button>
               </span>
               <div>
                 <AssetStatusBadge
+                  id={item.id}
                   status={item.status}
                   availableToBook={item.availableToBook}
                 />
@@ -109,16 +125,8 @@ const Row = ({
       </Td>
 
       {/* Category */}
-      <Td className="hidden md:table-cell">
-        {category ? (
-          <Badge color={category.color} withDot={false}>
-            {category.name}
-          </Badge>
-        ) : (
-          <Badge color={"#808080"} withDot={false}>
-            {"Uncategorized"}
-          </Badge>
-        )}
+      <Td>
+        <CategoryBadge category={category} />
       </Td>
     </>
   );

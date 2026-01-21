@@ -4,14 +4,19 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "~/components/shared/dropdown";
+import { DeleteCustomFieldDialog } from "./delete-dialog";
 import { Button } from "../shared/button";
 
 export function ActionsDropdown({ customField }: { customField: CustomField }) {
   return (
     <DropdownMenu modal={false}>
-      <DropdownMenuTrigger className="outline-none focus-visible:border-0">
+      <DropdownMenuTrigger
+        className="outline-none focus-visible:border-0"
+        aria-label="Actions Trigger"
+      >
         <i className="inline-block px-3 py-0 text-gray-400 ">
           <VerticalDotsIcon />
         </i>
@@ -19,7 +24,7 @@ export function ActionsDropdown({ customField }: { customField: CustomField }) {
 
       <DropdownMenuContent
         align="end"
-        className="order w-[180px] rounded-md bg-white p-0 text-right "
+        className="order w-[200px] rounded-md bg-white p-0 text-right "
       >
         <DropdownMenuItem className="px-4 py-3">
           <Button
@@ -33,6 +38,8 @@ export function ActionsDropdown({ customField }: { customField: CustomField }) {
             Edit
           </Button>
         </DropdownMenuItem>
+        <DropdownMenuSeparator className="bg-gray-100" />
+        <DeleteCustomFieldDialog customField={customField} />
       </DropdownMenuContent>
     </DropdownMenu>
   );

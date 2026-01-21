@@ -1,101 +1,108 @@
-import { OrganizationRoles } from "@prisma/client";
+import { useAtomValue } from "jotai";
+import { DateTime } from "luxon";
 import type {
   ActionFunctionArgs,
   LinksFunction,
   LoaderFunctionArgs,
-} from "@remix-run/node";
-import { json, redirect } from "@remix-run/node";
-import { useLoaderData } from "@remix-run/react";
-import { DateTime } from "luxon";
-import { BookingForm, NewBookingFormSchema } from "~/components/booking/form";
-import styles from "~/components/booking/styles.new.css?url";
-import { db } from "~/database/db.server";
-
-import { upsertBooking } from "~/modules/booking/service.server";
+  MetaFunction,
+} from "react-router";
+import { data, redirect, useLoaderData } from "react-router";
+import { dynamicTitleAtom } from "~/atoms/dynamic-title-atom";
+import { BookingFormSchema } from "~/components/booking/forms/forms-schema";
+import { NewBookingForm } from "~/components/booking/forms/new-booking-form";
+import { newBookingHeader } from "~/components/booking/new-booking-header";
+import Header from "~/components/layout/header";
+import { hasGetAllValue } from "~/hooks/use-model-filters";
+import { useUserData } from "~/hooks/use-user-data";
+import { createBooking } from "~/modules/booking/service.server";
+import { getBookingSettingsForOrganization } from "~/modules/booking-settings/service.server";
 import { setSelectedOrganizationIdCookie } from "~/modules/organization/context.server";
+import {
+  buildTagsSet,
+  getTagsForBookingTagsFilter,
+} from "~/modules/tag/service.server";
+import {
+  getTeamMember,
+  getTeamMemberForForm,
+} from "~/modules/team-member/service.server";
+import { getWorkingHoursForOrganization } from "~/modules/working-hours/service.server";
+import styles from "~/styles/layout/bookings.new.css?url";
+import { appendToMetaTitle } from "~/utils/append-to-meta-title";
 import { getClientHint, getHints } from "~/utils/client-hints";
+import { DATE_TIME_FORMAT } from "~/utils/constants";
 import { setCookie } from "~/utils/cookies.server";
-import { getBookingDefaultStartEndTimes } from "~/utils/date-fns";
 import { sendNotification } from "~/utils/emitter/send-notification.server";
-import { makeShelfError } from "~/utils/error";
-import { data, error, parseData } from "~/utils/http.server";
+import { makeShelfError, ShelfError } from "~/utils/error";
+import {
+  payload,
+  error,
+  getCurrentSearchParams,
+  parseData,
+} from "~/utils/http.server";
+import { isPersonalOrg } from "~/utils/organization";
 import {
   PermissionAction,
   PermissionEntity,
-} from "~/utils/permissions/permission.validator.server";
+} from "~/utils/permissions/permission.data";
 import { requirePermission } from "~/utils/roles.server";
 
-/**
- * In the case of bookings, when the user clicks "new", we automatically create the booking.
- * In order to not have to manage 2 different pages for new and view/edit we do some simple but big brain strategy
- * In the .new route we dont even return any html, we just create a draft booking and directly redirect to the .bookingId route.
- * This way all actions are available and its way easier to manage so in a way this works kind of like a resource route.
- */
+export type NewBookingLoaderReturnType = typeof loader;
+
 export async function loader({ context, request }: LoaderFunctionArgs) {
+  const searchParams = getCurrentSearchParams(request);
+  const assetIds = searchParams.getAll("assetId");
   const authSession = context.getSession();
   const { userId } = authSession;
 
   try {
-    const { organizationId, role } = await requirePermission({
-      userId: authSession?.userId,
-      request,
-      entity: PermissionEntity.booking,
-      action: PermissionAction.create,
-    });
-    const isSelfService = role === OrganizationRoles.SELF_SERVICE;
+    const { organizationId, currentOrganization, isSelfServiceOrBase } =
+      await requirePermission({
+        userId: authSession?.userId,
+        request,
+        entity: PermissionEntity.booking,
+        action: PermissionAction.create,
+      });
 
-    const [teamMembers, org] = await Promise.all([
-      /**
-       * We need to fetch the team members to be able to display them in the custodian dropdown.
-       */
-      db.teamMember.findMany({
-        where: {
-          deletedAt: null,
-          organizationId,
-          userId: {
-            not: null,
-          },
-        },
-        include: {
-          user: true,
-        },
-        orderBy: {
-          userId: "asc",
-        },
-      }),
-      /** We create a teamMember entry to represent the org owner.
-       * Most important thing is passing the ID of the owner as the userId as we are currently only supporting
-       * assigning custody to users, not NRM.
-       */
-      db.organization.findUnique({
-        where: {
-          id: organizationId,
-        },
-        select: {
-          owner: true,
-        },
-      }),
-    ]);
-
-    if (org?.owner) {
-      teamMembers.push({
-        id: "owner",
-        name: "owner",
-        user: org.owner,
-        userId: org.owner.id as string,
-        organizationId,
-        createdAt: new Date(),
-        updatedAt: new Date(),
-        deletedAt: null,
+    if (isPersonalOrg(currentOrganization)) {
+      throw new ShelfError({
+        cause: null,
+        title: "Not allowed",
+        message:
+          "You can't create bookings for personal workspaces. Please create a Team workspace to create bookings.",
+        label: "Booking",
+        shouldBeCaptured: false,
       });
     }
 
-    return json(
-      data({
-        showModal: true,
-        isSelfService,
-        selfServiceId: authSession.userId,
-        teamMembers,
+    /**
+     * We need to fetch the team members to be able to display them in the custodian dropdown.
+     */
+    const [teamMembersData, tagsData] = await Promise.all([
+      getTeamMemberForForm({
+        organizationId,
+        userId,
+        isSelfServiceOrBase,
+        getAll:
+          searchParams.has("getAll") &&
+          hasGetAllValue(searchParams, "teamMember"),
+      }),
+      getTagsForBookingTagsFilter({
+        organizationId,
+      }),
+    ]);
+
+    return data(
+      payload({
+        userId,
+        currentOrganization,
+        header: newBookingHeader,
+        showModal: false,
+        isSelfServiceOrBase,
+        ...teamMembersData,
+        // For consistency, also provide teamMembersForForm
+        teamMembersForForm: teamMembersData.teamMembers,
+        assetIds: assetIds.length ? assetIds : undefined,
+        ...tagsData,
       }),
       {
         headers: [
@@ -105,64 +112,121 @@ export async function loader({ context, request }: LoaderFunctionArgs) {
     );
   } catch (cause) {
     const reason = makeShelfError(cause, { userId });
-    throw json(error(reason), { status: reason.status });
+    throw data(error(reason), { status: reason.status });
   }
 }
+
+export const meta: MetaFunction<typeof loader> = ({ data }) => [
+  { title: data ? appendToMetaTitle(data.header.title) : "" },
+];
+
+export type NewBookingActionReturnType = typeof action;
 
 export async function action({ context, request }: ActionFunctionArgs) {
   const authSession = context.getSession();
   const { userId } = authSession;
 
   try {
-    const { organizationId, role } = await requirePermission({
+    const { organizationId, isSelfServiceOrBase } = await requirePermission({
       userId: authSession?.userId,
       request,
       entity: PermissionEntity.booking,
       action: PermissionAction.create,
     });
-    const isSelfService = role === OrganizationRoles.SELF_SERVICE;
 
     const formData = await request.formData();
+    const intent = formData.get("intent") as string;
+    const hints = getHints(request);
+    const workingHours = await getWorkingHoursForOrganization(organizationId);
+    const bookingSettings =
+      await getBookingSettingsForOrganization(organizationId);
+
+    // ADMIN/OWNER users bypass time restrictions (bufferStartTime, maxBookingLength)
+    const isAdminOrOwner = !isSelfServiceOrBase;
 
     const payload = parseData(
       formData,
-      NewBookingFormSchema(false, true, getHints(request)),
+      BookingFormSchema({
+        hints,
+        action: "new",
+        workingHours,
+        bookingSettings,
+        isAdminOrOwner,
+      }),
       {
         additionalData: { userId, organizationId },
       }
     );
 
-    const { name, custodian } = payload;
-    const hints = getHints(request);
+    const {
+      name,
+      custodian,
+      assetIds,
+      description,
+      tags: commaSeparatedTags,
+    } = payload;
 
-    const fmt = "yyyy-MM-dd'T'HH:mm";
+    // Validate that the custodian belongs to the same organization
+    const custodianFromDb = await getTeamMember({
+      id: custodian.id,
+      organizationId,
+      select: { id: true, userId: true },
+    }).catch((cause) => {
+      throw new ShelfError({
+        cause,
+        title: "Team member not found",
+        message: "The selected team member could not be found.",
+        additionalData: { userId, custodian },
+        label: "Booking",
+        status: 404,
+      });
+    });
+
+    /**
+     * Validate if the user is self user and is assigning the booking to
+     * him/herself only.
+     */
+    if (isSelfServiceOrBase && custodianFromDb.userId !== userId) {
+      throw new ShelfError({
+        cause: null,
+        message: "Self user can assign booking to themselves only.",
+        label: "Booking",
+      });
+    }
 
     const from = DateTime.fromFormat(
       formData.get("startDate")!.toString()!,
-      fmt,
+      DATE_TIME_FORMAT,
       {
         zone: hints.timeZone,
       }
     ).toJSDate();
 
-    const to = DateTime.fromFormat(formData.get("endDate")!.toString()!, fmt, {
-      zone: hints.timeZone,
-    }).toJSDate();
-
-    const booking = await upsertBooking(
+    const to = DateTime.fromFormat(
+      formData.get("endDate")!.toString()!,
+      DATE_TIME_FORMAT,
       {
-        custodianUserId: custodian,
-        organizationId,
-        name,
+        zone: hints.timeZone,
+      }
+    ).toJSDate();
+
+    const tags = buildTagsSet(commaSeparatedTags).set;
+
+    const booking = await createBooking({
+      booking: {
         from,
         to,
+        custodianTeamMemberId: custodian.id,
+        custodianUserId: custodian?.userId ?? null,
+        name: name!,
+        description: description ?? null,
+        organizationId,
         creatorId: authSession.userId,
-        ...(isSelfService && {
-          custodianUserId: authSession.userId,
-        }),
+        tags,
       },
-      getClientHint(request)
-    );
+      assetIds: assetIds?.length ? assetIds : [],
+      hints: getClientHint(request),
+    });
 
     sendNotification({
       title: "Booking saved",
@@ -171,46 +235,67 @@ export async function action({ context, request }: ActionFunctionArgs) {
       senderId: authSession.userId,
     });
 
-    const manageAssetsUrl = `/bookings/${
-      booking.id
-    }/add-assets?${new URLSearchParams({
-      // We force the as Date because we know that the booking.from and booking.to are set and exist at this point.
-      bookingFrom: (booking.from as Date).toISOString(),
-      bookingTo: (booking.to as Date).toISOString(),
-      hideUnavailable: "true",
-      unhideAssetsBookigIds: booking.id,
-    })}`;
+    const hasAssetIds = Boolean(assetIds);
 
-    return redirect(manageAssetsUrl);
+    if (intent === "scan") {
+      return redirect(`/bookings/${booking.id}/overview/scan-assets`);
+    }
+
+    if (hasAssetIds) {
+      return redirect(`/bookings/${booking.id}/overview`);
+    } else {
+      const manageAssetsUrl = `/bookings/${
+        booking.id
+      }/overview/manage-assets?${new URLSearchParams({
+        bookingFrom: (booking.from as Date).toISOString(),
+        bookingTo: (booking.to as Date).toISOString(),
+        hideUnavailable: "true",
+        unhideAssetsBookigIds: booking.id,
+      })}`;
+
+      return redirect(manageAssetsUrl);
+    }
   } catch (cause) {
     const reason = makeShelfError(cause, { userId });
-    return json(error(reason), { status: reason.status });
+    return data(error(reason), { status: reason.status });
   }
 }
+
+export const links: LinksFunction = () => [{ rel: "stylesheet", href: styles }];
 
 export const handle = {
   name: "bookings.new",
 };
 
-export const links: LinksFunction = () => [{ rel: "stylesheet", href: styles }];
 export default function NewBooking() {
-  const { isSelfService, selfServiceId } = useLoaderData<typeof loader>();
-  const { startDate, endDate } = getBookingDefaultStartEndTimes();
+  const { header, isSelfServiceOrBase, teamMembers, assetIds, showModal } =
+    useLoaderData<typeof loader>();
+  const user = useUserData();
+  const dynamicTitle = useAtomValue(dynamicTitleAtom);
+
+  // The loader already takes care of returning only the current user so we just get the first and only element in the array
+  const custodianRef = isSelfServiceOrBase
+    ? teamMembers.find((tm) => tm.userId === user!.id)?.id
+    : undefined;
+
+  const pageTitle = dynamicTitle?.trim().length
+    ? dynamicTitle
+    : header?.title ?? newBookingHeader.title;
+
   return (
-    <div className="booking-inner-wrapper">
-      <header className="mb-5">
-        <h2>Create new booking</h2>
-        <p>
-          Choose a name for your booking, select a start and end time and choose
-          the custodian. Based on the selected information, asset availability
-          will be determined.
-        </p>
-      </header>
-      <div>
-        <BookingForm
-          startDate={startDate}
-          endDate={endDate}
-          custodianUserId={isSelfService ? selfServiceId : undefined}
+    <div className="relative">
+      <Header
+        title={pageTitle}
+        subHeading={header?.subHeading}
+        hideBreadcrumbs={showModal}
+        classNames={showModal ? "[&>div]:border-b-0" : undefined}
+      />
+      <div className="booking-route-form-wrapper">
+        <NewBookingForm
+          booking={{
+            assetIds,
+            custodianRef,
+          }}
         />
       </div>
     </div>

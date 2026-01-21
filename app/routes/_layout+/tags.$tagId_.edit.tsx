@@ -1,34 +1,44 @@
-import type { LoaderFunctionArgs, MetaFunction } from "@remix-run/node";
-import { json, redirect } from "@remix-run/node";
-import {
-  Form,
-  useActionData,
-  useLoaderData,
-  useNavigation,
-} from "@remix-run/react";
+import { TagUseFor } from "@prisma/client";
+import type { LoaderFunctionArgs, MetaFunction } from "react-router";
+import { data, redirect, useActionData, useLoaderData } from "react-router";
 import { useZorm } from "react-zorm";
 import { z } from "zod";
+import { Form } from "~/components/custom-form";
+import { ColorInput } from "~/components/forms/color-input";
 import Input from "~/components/forms/input";
+import MultiSelect from "~/components/multi-select/multi-select";
 
 import { Button } from "~/components/shared/button";
+import { useDisabled } from "~/hooks/use-disabled";
 
 import { getTag, updateTag } from "~/modules/tag/service.server";
 import { appendToMetaTitle } from "~/utils/append-to-meta-title";
 import { sendNotification } from "~/utils/emitter/send-notification.server";
 import { makeShelfError } from "~/utils/error";
-import { isFormProcessing } from "~/utils/form";
-import { data, error, getParams, parseData } from "~/utils/http.server";
+import { payload, error, getParams, parseData } from "~/utils/http.server";
+import { formatEnum } from "~/utils/misc";
 
 import {
   PermissionAction,
   PermissionEntity,
-} from "~/utils/permissions/permission.validator.server";
+} from "~/utils/permissions/permission.data";
 import { requirePermission } from "~/utils/roles.server";
 import { zodFieldIsRequired } from "~/utils/zod";
 
 export const UpdateTagFormSchema = z.object({
   name: z.string().min(3, "Name is required"),
   description: z.string(),
+  color: z
+    .string()
+    .regex(/^#[0-9a-fA-F]{6}$/)
+    .optional()
+    .or(z.literal(""))
+    .transform((val) => (val === "" || !val ? null : val)),
+  useFor: z
+    .string()
+    .optional()
+    .transform((value) => (value && value.length > 0 ? value.split(",") : []))
+    .pipe(z.array(z.nativeEnum(TagUseFor)).optional().default([])),
 });
 
 const title = "Edit Tag";
@@ -54,10 +64,18 @@ export async function loader({ context, request, params }: LoaderFunctionArgs) {
       title,
     };
 
-    return json(data({ header, tag }));
+    return payload({
+      header,
+      tag,
+      colorFromServer: tag.color ?? undefined,
+      tagUseFor: Object.values(TagUseFor).map((useFor) => ({
+        label: formatEnum(useFor),
+        value: useFor,
+      })),
+    });
   } catch (cause) {
     const reason = makeShelfError(cause, { userId, id });
-    throw json(error(reason), { status: reason.status });
+    throw data(error(reason), { status: reason.status });
   }
 }
 
@@ -100,16 +118,15 @@ export async function action({ context, request, params }: LoaderFunctionArgs) {
     return redirect(`/tags`);
   } catch (cause) {
     const reason = makeShelfError(cause, { userId });
-    return json(error(reason), { status: reason.status });
+    return data(error(reason), { status: reason.status });
   }
 }
 
 export default function EditTag() {
   const zo = useZorm("NewQuestionWizardScreen", UpdateTagFormSchema);
-  const navigation = useNavigation();
-  const disabled = isFormProcessing(navigation.state);
-  const { tag } = useLoaderData<typeof loader>();
+  const { tag, tagUseFor, colorFromServer } = useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>();
+  const disabled = useDisabled();
 
   return tag ? (
     <>
@@ -144,13 +161,46 @@ export default function EditTag() {
               )}
               defaultValue={tag.description || undefined}
             />
+            <div className="mb-6 lg:mb-0">
+              <ColorInput
+                name={zo.fields.color()}
+                disabled={disabled}
+                error={zo.errors.color()?.message}
+                hideErrorText
+                colorFromServer={colorFromServer}
+                required={zodFieldIsRequired(UpdateTagFormSchema.shape.color)}
+              />
+            </div>
+
+            <MultiSelect
+              defaultSelected={tag.useFor.map((useFor) => ({
+                label: useFor,
+                value: useFor,
+              }))}
+              name="useFor"
+              items={tagUseFor}
+              labelKey="label"
+              valueKey="value"
+              label="Use for"
+              placeholder="Select use for"
+              tooltip={{
+                title: "Use for",
+                content:
+                  "When no specific entry is selected, this tag will be available for all entries.",
+              }}
+            />
           </div>
 
           <div className="flex gap-1">
-            <Button variant="secondary" to="/tags" size="sm">
+            <Button
+              variant="secondary"
+              to="/tags"
+              size="sm"
+              disabled={disabled}
+            >
               Cancel
             </Button>
-            <Button type="submit" size="sm">
+            <Button type="submit" size="sm" disabled={disabled}>
               Update
             </Button>
           </div>

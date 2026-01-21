@@ -1,4 +1,4 @@
-import { json, type LoaderFunctionArgs } from "@remix-run/node";
+import { data, type LoaderFunctionArgs } from "react-router";
 import { z } from "zod";
 import { db } from "~/database/db.server";
 import { ShelfError, makeShelfError } from "~/utils/error";
@@ -60,7 +60,7 @@ export async function loader({ context, params }: LoaderFunctionArgs) {
       });
     }
 
-    return new Response(image.blob, {
+    return new Response(new Uint8Array(image.blob), {
       headers: {
         "Content-Type": image.contentType,
         "Cache-Control": "max-age=31536000",
@@ -68,6 +68,6 @@ export async function loader({ context, params }: LoaderFunctionArgs) {
     });
   } catch (cause) {
     const reason = makeShelfError(cause, { userId });
-    return json(error(reason), { status: reason.status });
+    return data(error(reason), { status: reason.status });
   }
 }

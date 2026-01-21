@@ -2,87 +2,73 @@ import type {
   ActionFunctionArgs,
   MetaFunction,
   LoaderFunctionArgs,
-} from "@remix-run/node";
-import { json } from "@remix-run/node";
-import { Link } from "@remix-run/react";
+} from "react-router";
+import { data, Link } from "react-router";
 import { z } from "zod";
-import {
-  ImportBackup,
-  ImportContent,
-} from "~/components/assets/import-content";
+import { ImportContent } from "~/components/assets/import-content";
 import Header from "~/components/layout/header";
-import {
-  Tabs,
-  TabsContent,
-  TabsList,
-  TabsTrigger,
-} from "~/components/shared/tabs";
 import { createAssetsFromContentImport } from "~/modules/asset/service.server";
-import { assertUserCanImportAssets } from "~/modules/tier/service.server";
+import { ASSET_CSV_HEADERS } from "~/modules/asset/utils.server";
 import { appendToMetaTitle } from "~/utils/append-to-meta-title";
 import { csvDataFromRequest } from "~/utils/csv.server";
 import { ShelfError, makeShelfError } from "~/utils/error";
-import { data, error, parseData } from "~/utils/http.server";
+import { payload, error, parseData } from "~/utils/http.server";
 import { extractCSVDataFromContentImport } from "~/utils/import.server";
 import {
   PermissionAction,
   PermissionEntity,
-} from "~/utils/permissions/permission.validator.server";
+} from "~/utils/permissions/permission.data";
 import { requirePermission } from "~/utils/roles.server";
+import { assertUserCanImportAssets } from "~/utils/subscription.server";
 
 export const action = async ({ context, request }: ActionFunctionArgs) => {
   const authSession = context.getSession();
   const { userId } = authSession;
 
   try {
-    const { organizationId, organizations } = await requirePermission({
-      userId,
-      request,
-      entity: PermissionEntity.asset,
-      action: PermissionAction.import,
-    });
+    const { organizationId, organizations, canUseBarcodes } =
+      await requirePermission({
+        userId,
+        request,
+        entity: PermissionEntity.asset,
+        action: PermissionAction.import,
+      });
 
     await assertUserCanImportAssets({ organizationId, organizations });
 
     const { intent } = parseData(
       await request.clone().formData(),
       z.object({
-        intent: z.enum(["backup", "content"]),
+        intent: z.enum(["content"]),
       })
     );
 
     const csvData = await csvDataFromRequest({ request });
-
     if (csvData.length < 2) {
       throw new ShelfError({
         cause: null,
         message: "CSV file is empty",
         additionalData: { intent },
         label: "Assets",
+        shouldBeCaptured: false,
       });
     }
 
-    switch (intent) {
-      case "backup": {
-        throw new ShelfError({
-          cause: null,
-          message: "This feature is not available for you",
-          label: "Assets",
-        });
-      }
-      case "content": {
-        const contentData = extractCSVDataFromContentImport(csvData);
-        await createAssetsFromContentImport({
-          data: contentData,
-          userId,
-          organizationId,
-        });
-        return json(data(null));
-      }
-    }
+    const contentData = extractCSVDataFromContentImport(
+      csvData,
+      ASSET_CSV_HEADERS
+    );
+
+    await createAssetsFromContentImport({
+      data: contentData,
+      userId,
+      organizationId,
+      canUseBarcodes,
+    });
+    return payload({ success: true });
   } catch (cause) {
     const reason = makeShelfError(cause, { userId });
-    return json(error(reason), { status: reason.status });
+    return data(error(reason), { status: reason.status });
   }
 };
 
@@ -100,16 +86,14 @@ export const loader = async ({ context, request }: LoaderFunctionArgs) => {
 
     await assertUserCanImportAssets({ organizationId, organizations });
 
-    return json(
-      data({
-        header: {
-          title: "Import assets (beta)",
-        },
-      })
-    );
+    return payload({
+      header: {
+        title: "Import assets",
+      },
+    });
   } catch (cause) {
     const reason = makeShelfError(cause, { userId });
-    throw json(error(reason), { status: reason.status });
+    throw data(error(reason), { status: reason.status });
   }
 };
 
@@ -125,21 +109,8 @@ export default function AssetsImport() {
   return (
     <div className="h-full">
       <Header />
-      <div className="flex size-full flex-col items-center">
-        <div className="h-[180px] w-full"></div>
-        <Tabs defaultValue="content" className="w-1/2">
-          <TabsList>
-            <TabsTrigger value="content">Import your own content</TabsTrigger>
-            <TabsTrigger value="backup">Import from backup</TabsTrigger>
-          </TabsList>
-
-          <TabsContent value="content">
-            <ImportContent />
-          </TabsContent>
-          <TabsContent value="backup">
-            <ImportBackup />
-          </TabsContent>
-        </Tabs>
+      <div className="mx-auto flex h-auto w-full max-w-screen-sm flex-col items-center py-10">
+        <ImportContent />
       </div>
     </div>
   );

@@ -1,11 +1,10 @@
-import { json } from "@remix-run/node";
+import { useAtomValue } from "jotai";
 import type {
   ActionFunctionArgs,
   MetaFunction,
   LoaderFunctionArgs,
-} from "@remix-run/node";
-import { useLoaderData } from "@remix-run/react";
-import { useAtomValue } from "jotai";
+} from "react-router";
+import { data, useLoaderData } from "react-router";
 import { z } from "zod";
 import { dynamicTitleAtom } from "~/atoms/dynamic-title-atom";
 import {
@@ -14,23 +13,30 @@ import {
 } from "~/components/custom-fields/form";
 import Header from "~/components/layout/header";
 import type { HeaderData } from "~/components/layout/header/types";
-import { getAllEntriesForCreateAndEdit } from "~/modules/asset/service.server";
+import { getCategoriesForCreateAndEdit } from "~/modules/asset/service.server";
 import {
-  countActiveCustomFields,
   getCustomField,
   updateCustomField,
 } from "~/modules/custom-field/service.server";
-import { getOrganizationTierLimit } from "~/modules/tier/service.server";
 import { appendToMetaTitle } from "~/utils/append-to-meta-title";
+import { FIELD_TYPE_NAME } from "~/utils/custom-fields";
 import { sendNotification } from "~/utils/emitter/send-notification.server";
-import { makeShelfError, ShelfError } from "~/utils/error";
-import { data, error, getParams, parseData } from "~/utils/http.server";
+import { makeShelfError } from "~/utils/error";
+import { payload, error, getParams, parseData } from "~/utils/http.server";
 import {
   PermissionAction,
   PermissionEntity,
-} from "~/utils/permissions/permission.validator.server";
+} from "~/utils/permissions/permission.data";
 import { requirePermission } from "~/utils/roles.server";
-import { canCreateMoreCustomFields } from "~/utils/subscription";
+import { assertUserCanCreateMoreCustomFields } from "~/utils/subscription.server";
+
+export const meta: MetaFunction<typeof loader> = ({ data }) => [
+  { title: data ? appendToMetaTitle(data.header.title) : "" },
+];
+
+export const handle = {
+  breadcrumb: () => <span>Edit</span>,
+};
 
 export async function loader({ context, request, params }: LoaderFunctionArgs) {
   const authSession = context.getSession();
@@ -40,48 +46,45 @@ export async function loader({ context, request, params }: LoaderFunctionArgs) {
   });
 
   try {
-    const { organizationId } = await requirePermission({
+    const { organizationId, userOrganizations } = await requirePermission({
       userId: authSession.userId,
       request,
       entity: PermissionEntity.customField,
       action: PermissionAction.update,
     });
 
-    const customField = await getCustomField({ organizationId, id });
+    const customField = await getCustomField({
+      organizationId,
+      id,
+      userOrganizations,
+      request,
+      include: { categories: { select: { id: true } } },
+    });
 
-    const { categories, totalCategories } = await getAllEntriesForCreateAndEdit(
+    const { categories, totalCategories } = await getCategoriesForCreateAndEdit(
       {
         organizationId,
         request,
-        defaults: { category: customField.categories.map((c) => c.id) },
+        defaultCategory: customField.categories.map((c) => c.id),
       }
     );
 
     const header: HeaderData = {
       title: `Edit | ${customField.name}`,
+      subHeading: FIELD_TYPE_NAME[customField.type],
     };
 
-    return json(
-      data({
-        customField,
-        header,
-        categories,
-        totalCategories,
-      })
-    );
+    return payload({
+      customField,
+      header,
+      categories,
+      totalCategories,
+    });
   } catch (cause) {
     const reason = makeShelfError(cause, { userId, id });
-    throw json(error(reason), { status: reason.status });
+    throw data(error(reason), { status: reason.status });
   }
 }
-
-export const meta: MetaFunction<typeof loader> = ({ data }) => [
-  { title: data ? appendToMetaTitle(data.header.title) : "" },
-];
-
-export const handle = {
-  breadcrumb: () => <span>Edit</span>,
-};
 
 export async function action({ context, request, params }: ActionFunctionArgs) {
   const authSession = context.getSession();
@@ -98,50 +101,24 @@ export async function action({ context, request, params }: ActionFunctionArgs) {
       action: PermissionAction.update,
     });
 
-    const payload = parseData(
+    const parsedData = parseData(
       await request.formData(),
       NewCustomFieldFormSchema
     );
 
-    const { name, helpText, active, required, options, categories } = payload;
+    const { name, helpText, active, required, options, categories } =
+      parsedData;
+
+    const field = await getCustomField({ organizationId, id });
 
     /** If they are activating a field, we have to make sure that they are not already at the limit */
-    if (active) {
-      /** Get the tier limit and check if they can export */
-      const tierLimit = await getOrganizationTierLimit({
+    const isActivatingField = !field.active && active !== field.active;
+
+    if (isActivatingField) {
+      await assertUserCanCreateMoreCustomFields({
         organizationId,
         organizations,
       });
-
-      const totalActiveCustomFields = await countActiveCustomFields({
-        organizationId,
-      });
-
-      const canCreateMore = canCreateMoreCustomFields({
-        tierLimit,
-        totalCustomFields: totalActiveCustomFields,
-      });
-
-      if (!canCreateMore) {
-        throw new ShelfError({
-          cause: null,
-          message:
-            "You have reached your limit of active custom fields. Please upgrade your plan to add more.",
-          additionalData: {
-            userId,
-            active,
-            totalActiveCustomFields,
-            tierLimit,
-            validationErrors: {
-              active: {
-                message: `You have reached your limit of active custom fields. Please upgrade your plan to add more.`,
-              },
-            },
-          },
-          label: "Custom fields",
-          status: 403,
-        });
-      }
     }
 
     await updateCustomField({
@@ -152,6 +129,7 @@ export async function action({ context, request, params }: ActionFunctionArgs) {
       required,
       options,
       categories,
+      organizationId,
     });
 
     sendNotification({
@@ -161,10 +139,10 @@ export async function action({ context, request, params }: ActionFunctionArgs) {
       senderId: authSession.userId,
     });
 
-    return json(data(null));
+    return payload(null);
   } catch (cause) {
     const reason = makeShelfError(cause, { userId, id });
-    return json(error(reason), { status: reason.status });
+    return data(error(reason), { status: reason.status });
   }
 }
 

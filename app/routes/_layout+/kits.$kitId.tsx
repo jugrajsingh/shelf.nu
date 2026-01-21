@@ -1,55 +1,77 @@
-import { AssetStatus, type Prisma } from "@prisma/client";
-import { json, redirect } from "@remix-run/node";
+import { AssetStatus, BarcodeType, type Prisma } from "@prisma/client";
 import type {
   MetaFunction,
   LoaderFunctionArgs,
   ActionFunctionArgs,
   LinksFunction,
-} from "@remix-run/node";
-import { useLoaderData } from "@remix-run/react";
+} from "react-router";
+import {
+  data,
+  redirect,
+  Outlet,
+  useLoaderData,
+  useMatches,
+} from "react-router";
 import { z } from "zod";
-import { AssetImage } from "~/components/assets/asset-image";
-import { AssetStatusBadge } from "~/components/assets/asset-status-badge";
-import { ChevronRight } from "~/components/icons/library";
+import { CustodyCard } from "~/components/assets/asset-custody-card";
+import { CodePreview } from "~/components/code-preview/code-preview";
 import ActionsDropdown from "~/components/kits/actions-dropdown";
-import AssetRowActionsDropdown from "~/components/kits/asset-row-actions-dropdown";
+import BookingActionsDropdown from "~/components/kits/booking-actions-dropdown";
 import KitImage from "~/components/kits/kit-image";
 import { KitStatusBadge } from "~/components/kits/kit-status-badge";
-import ContextualModal from "~/components/layout/contextual-modal";
 import Header from "~/components/layout/header";
 import type { HeaderData } from "~/components/layout/header/types";
-import { List } from "~/components/list";
-import { Filters } from "~/components/list/filters";
-import { Badge } from "~/components/shared/badge";
-import { Button } from "~/components/shared/button";
-import { Card } from "~/components/shared/card";
-import { GrayBadge } from "~/components/shared/gray-badge";
-import { Image } from "~/components/shared/image";
-import TextualDivider from "~/components/shared/textual-divider";
-import { Td, Th } from "~/components/table";
+import HorizontalTabs from "~/components/layout/horizontal-tabs";
+import { ScanDetails } from "~/components/location/scan-details";
+import When from "~/components/when/when";
 import { db } from "~/database/db.server";
-import { useUserIsSelfService } from "~/hooks/user-user-is-self-service";
-import { createNote } from "~/modules/asset/service.server";
+import { usePosition } from "~/hooks/use-position";
+import { useUserRoleHelper } from "~/hooks/user-user-role-helper";
+import { createBarcode } from "~/modules/barcode/service.server";
+import {
+  validateBarcodeValue,
+  normalizeBarcodeValue,
+} from "~/modules/barcode/validation";
 import {
   deleteKit,
   deleteKitImage,
-  getAssetsForKits,
   getKit,
+  getKitCurrentBooking,
+  relinkKitQrCode,
 } from "~/modules/kit/service.server";
+import { createNote } from "~/modules/note/service.server";
+
+import { generateQrObj } from "~/modules/qr/utils.server";
+import { getScanByQrId } from "~/modules/scan/service.server";
+import { parseScanData } from "~/modules/scan/utils.server";
+import type { RouteHandleWithName } from "~/modules/types";
 import { getUserByID } from "~/modules/user/service.server";
 import dropdownCss from "~/styles/actions-dropdown.css?url";
 import { appendToMetaTitle } from "~/utils/append-to-meta-title";
 import { checkExhaustiveSwitch } from "~/utils/check-exhaustive-switch";
-import { getDateTimeFormat } from "~/utils/client-hints";
 import { sendNotification } from "~/utils/emitter/send-notification.server";
 import { makeShelfError } from "~/utils/error";
-import { data, error, getParams, parseData } from "~/utils/http.server";
+import { payload, error, getParams, parseData } from "~/utils/http.server";
+import { wrapLinkForNote, wrapUserLinkForNote } from "~/utils/markdoc-wrappers";
+import { userCanViewSpecificCustody } from "~/utils/permissions/custody-and-bookings-permissions.validator.client";
 import {
   PermissionAction,
   PermissionEntity,
-} from "~/utils/permissions/permission.validator.server";
+} from "~/utils/permissions/permission.data";
+import { userHasPermission } from "~/utils/permissions/permission.validator.client";
+import { useBarcodePermissions } from "~/utils/permissions/use-barcode-permissions";
 import { requirePermission } from "~/utils/roles.server";
 import { tw } from "~/utils/tw";
+
+type KitWithOptionalBarcodes = ReturnType<
+  typeof useLoaderData<typeof loader>
+>["kit"] & {
+  barcodes?: Array<{
+    id: string;
+    type: any;
+    value: string;
+  }>;
+};
 
 export async function loader({ context, request, params }: LoaderFunctionArgs) {
   const authSession = context.getSession();
@@ -63,43 +85,86 @@ export async function loader({ context, request, params }: LoaderFunctionArgs) {
   );
 
   try {
-    const { organizationId } = await requirePermission({
+    const {
+      organizationId,
+      userOrganizations,
+      currentOrganization,
+      canUseBarcodes,
+    } = await requirePermission({
       userId,
       request,
       entity: PermissionEntity.kit,
       action: PermissionAction.read,
     });
 
-    const [kit, assets] = await Promise.all([
+    const [kit, qrObj] = await Promise.all([
       getKit({
         id: kitId,
+        organizationId,
         extraInclude: {
           assets: {
-            select: { status: true, custody: { select: { id: true } } },
+            select: {
+              id: true,
+              status: true,
+              custody: { select: { id: true } },
+              bookings: {
+                where: {
+                  status: { in: ["ONGOING", "OVERDUE"] },
+                },
+                select: {
+                  id: true,
+                  name: true,
+                  from: true,
+                  status: true,
+                  custodianTeamMember: true,
+                  custodianUser: {
+                    select: {
+                      firstName: true,
+                      lastName: true,
+                      profilePicture: true,
+                      email: true,
+                    },
+                  },
+                },
+              },
+              availableToBook: true,
+            },
           },
-          custody: { select: { custodian: true } },
+          qrCodes: true,
+          ...(canUseBarcodes && {
+            barcodes: {
+              select: {
+                id: true,
+                type: true,
+                value: true,
+              },
+            },
+          }),
         },
-      }),
-      getAssetsForKits({
+        userOrganizations,
         request,
-        organizationId,
+      }),
+      generateQrObj({
         kitId,
+        userId,
+        organizationId,
       }),
     ]);
 
-    let custody = null;
-    if (kit.custody) {
-      const date = new Date(kit.custody.createdAt);
-      const dateDisplay = getDateTimeFormat(request, {
-        dateStyle: "short",
-        timeStyle: "short",
-      }).format(date);
-
-      custody = {
-        ...kit.custody,
-        dateDisplay,
-      };
-    }
+    /**
+     * We get the first QR code(for now we can only have 1)
+     * And using the ID of tha qr code, we find the latest scan
+     */
+    const lastScan = kit.qrCodes[0]?.id
+      ? parseScanData({
+          scan: (await getScanByQrId({ qrId: kit.qrCodes[0].id })) || null,
+          userId,
+        })
+      : null;
+    const currentBooking = getKitCurrentBooking({
+      id: kit.id,
+      assets: kit.assets,
+    });
 
     const header: HeaderData = {
       title: kit.name,
@@ -110,20 +175,19 @@ export async function loader({ context, request, params }: LoaderFunctionArgs) {
       plural: "assets",
     };
 
-    return json(
-      data({
-        kit: {
-          ...kit,
-          custody,
-        },
-        header,
-        ...assets,
-        modelName,
-      })
-    );
+    return payload({
+      kit,
+      currentBooking,
+      header,
+      modelName,
+      qrObj,
+      lastScan,
+      currentOrganization,
+      userId,
+    });
   } catch (cause) {
-    const reason = makeShelfError(cause);
-    throw json(error(reason));
+    const reason = makeShelfError(cause, { kitId, userId });
+    throw data(error(reason), { status: reason.status });
   }
 }
 
@@ -148,20 +212,45 @@ export async function action({ context, request, params }: ActionFunctionArgs) {
   });
 
   try {
+    const formData = await request.formData();
+    const { intent } = parseData(
+      formData,
+      z.object({
+        intent: z.enum([
+          "removeAsset",
+          "delete",
+          "add-barcode",
+          "relink-qr-code",
+        ]),
+      })
+    );
+
+    const intent2ActionMap: { [K in typeof intent]: PermissionAction } = {
+      delete: PermissionAction.delete,
+      removeAsset: PermissionAction.update,
+      "add-barcode": PermissionAction.update,
+      "relink-qr-code": PermissionAction.update,
+    };
+
     const { organizationId } = await requirePermission({
       userId,
       request,
       entity: PermissionEntity.kit,
-      action: PermissionAction.delete,
+      action: intent2ActionMap[intent],
     });
 
-    const user = await getUserByID(userId);
+    const user = await getUserByID(userId, {
+      select: {
+        id: true,
+        firstName: true,
+        lastName: true,
+      } satisfies Prisma.UserSelect,
+    });
 
-    const { intent, image } = parseData(
-      await request.clone().formData(),
+    const { image } = parseData(
+      formData,
       z.object({
         image: z.string().optional(),
-        intent: z.enum(["removeAsset", "delete"]),
       }),
       { additionalData: { userId, organizationId, kitId } }
     );
@@ -185,7 +274,7 @@ export async function action({ context, request, params }: ActionFunctionArgs) {
       }
       case "removeAsset": {
         const { assetId } = parseData(
-          await request.formData(),
+          formData,
           z.object({
             assetId: z.string(),
           }),
@@ -193,7 +282,7 @@ export async function action({ context, request, params }: ActionFunctionArgs) {
         );
 
         const kit = await db.kit.update({
-          where: { id: kitId },
+          where: { id: kitId, organizationId },
           data: {
             assets: { disconnect: { id: assetId } },
           },
@@ -205,7 +294,7 @@ export async function action({ context, request, params }: ActionFunctionArgs) {
          */
         if (kit.custody?.custodianId) {
           await db.asset.update({
-            where: { id: assetId },
+            where: { id: assetId, organizationId },
             data: {
               status: AssetStatus.AVAILABLE,
               custody: { delete: true },
@@ -213,8 +302,15 @@ export async function action({ context, request, params }: ActionFunctionArgs) {
           });
         }
 
+        const actor = wrapUserLinkForNote({
+          id: userId,
+          firstName: user.firstName,
+          lastName: user.lastName,
+        });
+        const kitLink = wrapLinkForNote(`/kits/${kitId}`, kit.name.trim());
+
         await createNote({
-          content: `**${user.firstName?.trim()} ${user.lastName?.trim()}** removed asset from **[${kit.name.trim()}](/kits/${kitId})**`,
+          content: `${actor} removed the asset from ${kitLink}.`,
           type: "UPDATE",
           userId,
           assetId,
@@ -227,228 +323,214 @@ export async function action({ context, request, params }: ActionFunctionArgs) {
           senderId: authSession.userId,
         });
 
-        return json(data({ kit }));
+        return payload({ kit });
+      }
+
+      case "add-barcode": {
+        const { barcodeType, barcodeValue } = parseData(
+          formData,
+          z.object({
+            barcodeType: z.nativeEnum(BarcodeType),
+            barcodeValue: z.string().min(1, "Barcode value is required"),
+          })
+        );
+
+        // Validate barcode value
+        const normalizedValue = normalizeBarcodeValue(
+          barcodeType,
+          barcodeValue
+        );
+        const validationError = validateBarcodeValue(
+          barcodeType,
+          normalizedValue
+        );
+
+        if (validationError) {
+          return data(payload({ error: validationError }), { status: 400 });
+        }
+
+        try {
+          await createBarcode({
+            type: barcodeType,
+            value: normalizedValue,
+            organizationId,
+            userId,
+            kitId,
+          });
+
+          sendNotification({
+            title: "Barcode added",
+            message: "Barcode has been added to your kit successfully",
+            icon: { name: "success", variant: "success" },
+            senderId: authSession.userId,
+          });
+
+          return payload({ success: true });
+        } catch (cause) {
+          // Handle constraint violations and other barcode creation errors
+          const reason = makeShelfError(cause);
+
+          // Extract specific validation errors if they exist
+          const validationErrors = reason.additionalData
+            ?.validationErrors as any;
+          if (validationErrors && validationErrors["barcodes[0].value"]) {
+            return data(
+              payload({ error: validationErrors["barcodes[0].value"].message }),
+              {
+                status: reason.status,
+              }
+            );
+          }
+
+          return data(payload({ error: reason.message }), {
+            status: reason.status,
+          });
+        }
+      }
+
+      case "relink-qr-code": {
+        const { newQrId } = parseData(
+          formData,
+          z.object({ newQrId: z.string() })
+        );
+
+        await relinkKitQrCode({
+          qrId: newQrId,
+          kitId,
+          organizationId,
+          userId,
+        });
+
+        sendNotification({
+          title: "QR Relinked",
+          message: "A new qr code has been linked to your kit.",
+          icon: { name: "success", variant: "success" },
+          senderId: authSession.userId,
+        });
+
+        return payload({ success: true });
       }
 
       default: {
         checkExhaustiveSwitch(intent);
-        return json(data(null));
+        return payload(null);
       }
     }
   } catch (cause) {
     const reason = makeShelfError(cause, { userId, kitId });
-    return json(error(reason), { status: reason.status });
+    return data(error(reason), { status: reason.status });
   }
 }
 
 export default function KitDetails() {
-  const { kit } = useLoaderData<typeof loader>();
+  usePosition();
+  const { kit, currentBooking, qrObj, lastScan, userId, currentOrganization } =
+    useLoaderData<typeof loader>();
+  const { roles } = useUserRoleHelper();
+  const { canUseBarcodes } = useBarcodePermissions();
 
-  const isSelfService = useUserIsSelfService();
-  const kitIsAvailable = kit.status === "AVAILABLE";
+  const kitHasUnavailableAssets = kit.assets.some((a) => !a.availableToBook);
 
-  return (
+  const items = [
+    { to: "assets", content: "Assets" },
+    { to: "overview", content: "Overview" },
+    { to: "bookings", content: "Bookings" },
+  ];
+
+  const matches = useMatches();
+  const currentRoute: RouteHandleWithName = matches[matches.length - 1];
+
+  /**When we are on the kit.scan-assets route, we render an outlet on the whole layout.
+   * On the .assets and .bookings routes, we render the outlet only on the left column
+   */
+  const shouldRenderFullOutlet =
+    currentRoute?.handle?.name === "kit.scan-assets";
+
+  return shouldRenderFullOutlet ? (
+    <Outlet />
+  ) : (
     <>
       <Header
-        subHeading={<KitStatusBadge status={kit.status} availableToBook />}
+        subHeading={
+          <KitStatusBadge
+            status={kit.status}
+            availableToBook={!kitHasUnavailableAssets}
+          />
+        }
+        slots={{
+          "left-of-title": (
+            <KitImage
+              kit={{
+                kitId: kit.id,
+                image: kit.image,
+                imageExpiration: kit.imageExpiration,
+                alt: kit.name,
+              }}
+              className={tw("mr-4 size-14 rounded border object-cover")}
+              withPreview
+            />
+          ),
+        }}
       >
-        {!isSelfService ? <ActionsDropdown /> : null}
+        <When
+          truthy={userHasPermission({
+            roles,
+            entity: PermissionEntity.kit,
+            action: [PermissionAction.update, PermissionAction.custody],
+          })}
+        >
+          <ActionsDropdown />
+        </When>
+        <BookingActionsDropdown />
       </Header>
 
-      <ContextualModal />
+      <HorizontalTabs items={items} />
 
-      <div className="mt-8 lg:flex">
-        <div className="shrink-0 overflow-hidden lg:w-[343px] xl:w-[400px]">
-          <KitImage
-            kit={{
-              kitId: kit.id,
-              image: kit.image,
-              imageExpiration: kit.imageExpiration,
-              alt: kit.name,
-            }}
-            className={tw(
-              "h-auto w-full rounded border object-cover",
-              kit.description ? "rounded-b-none border-b-0" : ""
-            )}
-          />
-          {kit.description ? (
-            <Card className="mb-3 mt-0 rounded-t-none border-t-0">
-              <p className="whitespace-pre-wrap text-gray-600">
-                {kit.description}
-              </p>
-            </Card>
-          ) : null}
-
-          {/* Kit Custody */}
-          {!isSelfService && !kitIsAvailable && kit?.custody?.createdAt ? (
-            <Card className="my-3">
-              <div className="flex items-center gap-3">
-                <img
-                  src="/static/images/default_pfp.jpg"
-                  alt="custodian"
-                  className="size-10 rounded"
-                />
-                <div>
-                  <p className="">
-                    In custody of{" "}
-                    <span className="font-semibold">
-                      {kit.custody?.custodian.name}
-                    </span>
-                  </p>
-                  <span>Since {kit.custody.dateDisplay}</span>
-                </div>
-              </div>
-            </Card>
-          ) : null}
-
-          <TextualDivider text="Details" className="mb-8 lg:hidden" />
-          <Card className="my-3 flex justify-between">
-            <span className="text-xs font-medium text-gray-600">ID</span>
-            <div className="max-w-[250px] font-medium">{kit.id}</div>
-          </Card>
+      <div className="mt-4 block md:mx-0 lg:flex">
+        {/* Left column */}
+        <div className="flex-1 md:overflow-hidden">
+          <Outlet />
         </div>
 
-        <div className="w-full lg:ml-6">
-          <TextualDivider text="Assets" className="mb-8 lg:hidden" />
-          <div className="mb-3 flex gap-4 lg:hidden">
-            <Button
-              as="button"
-              to="add-assets"
-              variant="primary"
-              icon="plus"
-              width="full"
-            >
-              Manage assets
-            </Button>
-            <div className="w-full">
-              <ActionsDropdown fullWidth />
-            </div>
-          </div>
-
-          <div className="flex flex-col md:gap-2">
-            <Filters className="responsive-filters mb-2 lg:mb-0">
-              <div className="flex items-center justify-normal gap-6 xl:justify-end">
-                <div className="hidden lg:block">
-                  <Button
-                    as="button"
-                    to="manage-assets"
-                    variant="primary"
-                    icon="plus"
-                    className="whitespace-nowrap"
-                  >
-                    Manage assets
-                  </Button>
-                </div>
-              </div>
-            </Filters>
-            <List
-              ItemComponent={ListContent}
-              customEmptyStateContent={{
-                title: "Not assets in kit",
-                text: "Start by adding your first asset.",
-                newButtonContent: "Manage assets",
-                newButtonRoute: "manage-assets",
-              }}
-              headerChildren={
-                <>
-                  <Th className="hidden md:table-cell">Category</Th>
-                  <Th className="hidden md:table-cell">Location</Th>
-                </>
-              }
+        {/* Right column */}
+        <div className="w-full md:w-[360px] lg:ml-4">
+          {/* Kit Custody */}
+          <When truthy={!!kit.custody || !!currentBooking}>
+            <CustodyCard
+              className="mt-0"
+              booking={currentBooking || undefined}
+              hasPermission={userCanViewSpecificCustody({
+                roles,
+                custodianUserId: kit?.custody?.custodian?.user?.id,
+                organization: currentOrganization,
+                currentUserId: userId,
+              })}
+              custody={kit.custody}
             />
-          </div>
+          </When>
+
+          <CodePreview
+            qrObj={qrObj}
+            barcodes={
+              canUseBarcodes
+                ? (kit as KitWithOptionalBarcodes).barcodes || []
+                : []
+            }
+            item={{
+              id: kit.id,
+              name: kit.name,
+              type: "kit",
+            }}
+          />
+          {userHasPermission({
+            roles,
+            entity: PermissionEntity.scan,
+            action: PermissionAction.read,
+          }) ? (
+            <ScanDetails lastScan={lastScan} />
+          ) : null}
         </div>
       </div>
-    </>
-  );
-}
-
-function ListContent({
-  item,
-}: {
-  item: Prisma.AssetGetPayload<{
-    include: {
-      location: {
-        include: { image: { select: { id: true; updatedAt: true } } };
-      };
-      category: true;
-    };
-  }>;
-}) {
-  const { id, mainImage, mainImageExpiration, title, location, category } =
-    item;
-
-  return (
-    <>
-      <Td className="w-full p-0 md:p-0">
-        <div className="flex justify-between gap-3 p-4 md:justify-normal md:px-6">
-          <div className="flex items-center gap-3">
-            <div className="flex size-12 items-center justify-center">
-              <AssetImage
-                asset={{
-                  assetId: id,
-                  mainImage,
-                  mainImageExpiration,
-                  alt: title,
-                }}
-                className="size-full rounded-[4px] border object-cover"
-              />
-            </div>
-            <div className="flex flex-row items-center gap-2 md:flex-col md:items-start md:gap-0">
-              <Button
-                to={`/assets/${item.id}`}
-                variant="link"
-                className="mb-1 text-gray-900 hover:text-gray-700"
-              >
-                {item.title}
-              </Button>
-              <AssetStatusBadge
-                status={item.status}
-                availableToBook={item.availableToBook}
-              />
-              <div className="block md:hidden">
-                {category ? (
-                  <Badge color={category.color} withDot={false}>
-                    {category.name}
-                  </Badge>
-                ) : null}
-              </div>
-            </div>
-          </div>
-
-          <button className="block md:hidden">
-            <ChevronRight />
-          </button>
-        </div>
-      </Td>
-
-      <Td className="hidden md:table-cell">
-        {category ? (
-          <Badge color={category.color} withDot={false}>
-            {category.name}
-          </Badge>
-        ) : null}
-      </Td>
-
-      <Td className="hidden md:table-cell">
-        {location ? (
-          <GrayBadge>
-            {location.image ? (
-              <Image
-                imageId={location.image.id}
-                alt="img"
-                className="mr-1 size-4 rounded-full object-cover"
-                updatedAt={location.image?.updatedAt}
-              />
-            ) : null}
-            <span>{location.name}</span>
-          </GrayBadge>
-        ) : null}
-      </Td>
-
-      <Td className="pr-4 text-right">
-        <AssetRowActionsDropdown asset={item} />
-      </Td>
     </>
   );
 }

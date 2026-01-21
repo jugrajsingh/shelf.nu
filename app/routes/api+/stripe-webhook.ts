@@ -1,17 +1,26 @@
 import { TierId } from "@prisma/client";
-import type { ActionFunctionArgs } from "@remix-run/node";
-import { json } from "@remix-run/node";
+import { data, type ActionFunctionArgs } from "react-router";
 import type Stripe from "stripe";
 import { db } from "~/database/db.server";
+import { sendEmail } from "~/emails/mail.server";
 import { trialEndsSoonText } from "~/emails/stripe/trial-ends-soon";
+import { sendTeamTrialWelcomeEmail } from "~/emails/stripe/welcome-to-trial";
+import { resetPersonalWorkspaceBranding } from "~/modules/organization/service.server";
+import { CUSTOM_INSTALL_CUSTOMERS } from "~/utils/env";
 import { ShelfError, makeShelfError } from "~/utils/error";
 import { error } from "~/utils/http.server";
-import { sendEmail } from "~/utils/mail.server";
 import {
   fetchStripeSubscription,
   getDataFromStripeEvent,
   stripe,
 } from "~/utils/stripe.server";
+
+const subscriptionTiersPriority: Record<TierId, number> = {
+  free: 0,
+  tier_1: 1, // plus
+  tier_2: 2, // team
+  custom: 3, // Custom
+};
 
 export async function action({ request }: ActionFunctionArgs) {
   try {
@@ -23,6 +32,35 @@ export async function action({ request }: ActionFunctionArgs) {
       sig,
       process.env.STRIPE_WEBHOOK_ENDPOINT_SECRET
     );
+
+    const customInstallUsers = (CUSTOM_INSTALL_CUSTOMERS ?? "").split(",");
+    const eventData = event.data.object as { customer: string };
+    const customerId = eventData.customer;
+    const user = await db.user
+      .findFirstOrThrow({
+        where: { customerId },
+        select: {
+          id: true,
+          email: true,
+          firstName: true,
+          lastName: true,
+          tierId: true,
+        },
+      })
+      .catch((cause) => {
+        throw new ShelfError({
+          cause,
+          message: "No user found",
+          additionalData: { customerId },
+          label: "Stripe webhook",
+          status: 500,
+        });
+      });
+
+    /** We don't have to do anything in case if the user is custom install. */
+    if (customInstallUsers.includes(customerId)) {
+      return new Response(null, { status: 200 });
+    }
 
     // Handle the event
     // Don't forget to enable the events in the Stripe dashboard
@@ -74,6 +112,7 @@ export async function action({ request }: ActionFunctionArgs) {
             data: {
               tierId: tierId as TierId,
             },
+            select: { id: true },
           })
           .catch((cause) => {
             throw new ShelfError({
@@ -108,12 +147,14 @@ export async function action({ request }: ActionFunctionArgs) {
 
         if (isTrialSubscription) {
           /** WHen its a trial subscription, update the tier of the user */
-          await db.user
+          const user = await db.user
             .update({
               where: { customerId },
               data: {
                 tierId: tierId as TierId,
+                usedFreeTrial: true,
               },
+              select: { email: true },
             })
             .catch((cause) => {
               throw new ShelfError({
@@ -124,6 +165,11 @@ export async function action({ request }: ActionFunctionArgs) {
                 status: 500,
               });
             });
+
+          /** Send the TRIAL welcome email with instructions */
+          void sendTeamTrialWelcomeEmail({
+            email: user.email,
+          });
         }
 
         return new Response(null, { status: 200 });
@@ -143,17 +189,25 @@ export async function action({ request }: ActionFunctionArgs) {
             status: 500,
           });
         }
+        /** Check whether the paused subscription is higher tier or equal tier and the current one and only then cancel */
+        const pausedSubscriptionIsHigherTier =
+          subscriptionTiersPriority[tierId as TierId] >=
+          subscriptionTiersPriority[user.tierId];
 
         /** When its a trial subscription, update the tier of the user
          * In that case we just set it back to free
          */
-        if (subscription.status === "paused") {
+        if (
+          subscription.status === "paused" &&
+          pausedSubscriptionIsHigherTier
+        ) {
           await db.user
             .update({
               where: { customerId },
               data: {
                 tierId: "free",
               },
+              select: { id: true },
             })
             .catch((cause) => {
               throw new ShelfError({
@@ -164,6 +218,11 @@ export async function action({ request }: ActionFunctionArgs) {
                 status: 500,
               });
             });
+
+          // Only reset branding when downgrading from Plus (tier_1) to Free
+          if (user.tierId === TierId.tier_1) {
+            await resetPersonalWorkspaceBranding(user.id);
+          }
         }
 
         return new Response(null, { status: 200 });
@@ -187,14 +246,22 @@ export async function action({ request }: ActionFunctionArgs) {
          *
          * We only update the tier if the subscription is not paused
          * We only do it if the subscription is active because this event gets triggered when cancelling or pausing for example
+         * We only do it if the subscription is higher tier than the current subscription they have. The tier order is free -> plus -> team
          */
-        if (subscription.status === "active") {
+
+        /** Check whether the new subscription is higher tier and the current one and only then cancel */
+        const newSubscriptionIsHigherTier =
+          subscriptionTiersPriority[tierId as TierId] >
+          subscriptionTiersPriority[user.tierId];
+
+        if (subscription.status === "active" && newSubscriptionIsHigherTier) {
           await db.user
             .update({
               where: { customerId },
               data: {
                 tierId: tierId as TierId,
               },
+              select: { id: true },
             })
             .catch((cause) => {
               throw new ShelfError({
@@ -212,33 +279,44 @@ export async function action({ request }: ActionFunctionArgs) {
 
       case "customer.subscription.deleted": {
         // Occurs whenever a customer’s subscription ends.
-        const subscription = event.data.object as Stripe.Subscription;
-        const customerId = subscription.customer as string;
+        const { customerId, tierId } = await getDataFromStripeEvent(event);
 
-        await db.user
-          .update({
-            where: { customerId },
-            data: {
-              tierId: TierId.free,
-            },
-          })
-          .catch((cause) => {
-            throw new ShelfError({
-              cause,
-              message: "Failed to delete user subscription",
-              additionalData: { customerId, event },
-              label: "Stripe webhook",
-              status: 500,
+        /** Check whether the deleted subscription is higher tier or equal tier and the current one and only then cancel */
+        const deletedSubscriptionIsHigherTier =
+          subscriptionTiersPriority[tierId as TierId] >=
+          subscriptionTiersPriority[user.tierId];
+
+        if (deletedSubscriptionIsHigherTier) {
+          await db.user
+            .update({
+              where: { customerId },
+              data: {
+                tierId: TierId.free,
+              },
+              select: { id: true },
+            })
+            .catch((cause) => {
+              throw new ShelfError({
+                cause,
+                message: "Failed to delete user subscription",
+                additionalData: { customerId, event },
+                label: "Stripe webhook",
+                status: 500,
+              });
             });
-          });
+
+          // Only reset branding when downgrading from Plus (tier_1) to Free
+          if (user.tierId === TierId.tier_1) {
+            await resetPersonalWorkspaceBranding(user.id);
+          }
+        }
 
         return new Response(null, { status: 200 });
       }
 
       case "customer.subscription.trial_will_end": {
         // Occurs three days before the trial period of a subscription is scheduled to end.
-        const { customerId, tierId, subscription } =
-          await getDataFromStripeEvent(event);
+        const { tierId, subscription } = await getDataFromStripeEvent(event);
 
         if (!tierId) {
           throw new ShelfError({
@@ -254,21 +332,7 @@ export async function action({ request }: ActionFunctionArgs) {
           subscription.trial_end && subscription.trial_start;
 
         if (isTrialSubscription) {
-          const user = await db.user
-            .findUniqueOrThrow({
-              where: { customerId },
-            })
-            .catch((cause) => {
-              throw new ShelfError({
-                cause,
-                message: "No user found",
-                additionalData: { customerId },
-                label: "Stripe webhook",
-                status: 500,
-              });
-            });
-
-          await sendEmail({
+          sendEmail({
             to: user.email,
             subject: "Your shelf.nu free trial is ending soon",
             text: trialEndsSoonText({
@@ -299,6 +363,6 @@ export async function action({ request }: ActionFunctionArgs) {
     }
   } catch (cause) {
     const reason = makeShelfError(cause);
-    return json(error(reason), { status: reason.status });
+    return data(error(reason), { status: reason.status });
   }
 }

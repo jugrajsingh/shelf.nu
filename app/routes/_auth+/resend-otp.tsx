@@ -1,10 +1,15 @@
-import type { ActionFunctionArgs } from "@remix-run/node";
-import { json } from "@remix-run/node";
+import type { ActionFunctionArgs } from "react-router";
+import { data } from "react-router";
 import { z } from "zod";
-import { resendVerificationEmail } from "~/modules/auth/service.server";
+import { sendOTP } from "~/modules/auth/service.server";
 import { makeShelfError, notAllowedMethod } from "~/utils/error";
 
-import { error, getActionMethod, parseData } from "~/utils/http.server";
+import {
+  payload,
+  error,
+  getActionMethod,
+  parseData,
+} from "~/utils/http.server";
 import { validEmail } from "~/utils/misc";
 
 export async function action({ request }: ActionFunctionArgs) {
@@ -25,13 +30,17 @@ export async function action({ request }: ActionFunctionArgs) {
           })
         );
 
-        await resendVerificationEmail(email);
+        await sendOTP(email);
+        return payload({ success: true });
       }
     }
 
     throw notAllowedMethod(method);
   } catch (cause) {
-    const reason = makeShelfError(cause);
-    return json(error(reason), { status: reason.status });
+    //@ts-expect-error
+    const isRateLimitError = cause.code === "over_email_send_rate_limit";
+
+    const reason = makeShelfError(cause, {}, !isRateLimitError);
+    return data(error(reason), { status: reason.status });
   }
 }

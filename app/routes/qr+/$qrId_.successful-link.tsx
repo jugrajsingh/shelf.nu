@@ -1,6 +1,5 @@
-import { json } from "@remix-run/node";
-import type { MetaFunction, LoaderFunctionArgs } from "@remix-run/node";
-import { useLoaderData } from "@remix-run/react";
+import type { MetaFunction, LoaderFunctionArgs } from "react-router";
+import { data, useLoaderData } from "react-router";
 import { z } from "zod";
 
 import { ErrorContent } from "~/components/errors";
@@ -11,7 +10,8 @@ import { Button } from "~/components/shared/button";
 import { db } from "~/database/db.server";
 import { appendToMetaTitle } from "~/utils/append-to-meta-title";
 import { makeShelfError, ShelfError } from "~/utils/error";
-import { data, error, getParams } from "~/utils/http.server";
+import { payload, error, getParams } from "~/utils/http.server";
+import { normalizeQrData } from "~/utils/qr";
 
 export const loader = async ({ context, params }: LoaderFunctionArgs) => {
   const authSession = context.getSession();
@@ -23,10 +23,20 @@ export const loader = async ({ context, params }: LoaderFunctionArgs) => {
       .findUniqueOrThrow({
         where: { id: qrId },
         select: {
+          id: true,
+          assetId: true,
+          kitId: true,
+
           asset: {
             select: {
               id: true,
               title: true,
+            },
+          },
+          kit: {
+            select: {
+              id: true,
+              name: true,
             },
           },
         },
@@ -41,17 +51,15 @@ export const loader = async ({ context, params }: LoaderFunctionArgs) => {
         });
       });
 
-    return json(
-      data({
-        header: {
-          title: "Successfully linked asset to QR code",
-        },
-        asset: qr.asset,
-      })
-    );
+    return payload({
+      header: {
+        title: "Successfully linked asset to QR code",
+      },
+      qr,
+    });
   } catch (cause) {
     const reason = makeShelfError(cause, { userId, qrId });
-    throw json(error(reason));
+    throw data(error(reason), { status: reason.status });
   }
 };
 
@@ -60,25 +68,30 @@ export const meta: MetaFunction<typeof loader> = ({ data }) => [
 ];
 
 export default function QrSuccessfullLink() {
-  const { asset } = useLoaderData<typeof loader>();
-  return asset ? (
+  const { qr } = useLoaderData<typeof loader>();
+  const { item, type, normalizedName } = normalizeQrData(qr);
+
+  if (!item || !type) {
+    return null;
+  }
+
+  return (
     <>
       <div className="flex max-h-full flex-1 flex-col items-center justify-center ">
         <span className="mb-2.5 flex size-12 items-center justify-center rounded-full bg-success-50 p-2 text-success-600">
           <LinkIcon />
         </span>
-        <h3>Succesfully linked Item</h3>
+        <h3>Succesfully linked</h3>
         <p>
-          Your asset <b>{asset.title}</b> has been linked with this QR code.
+          Your {type} <b>{normalizedName}</b> has been linked with this QR code.
         </p>
         <div className="mt-8 flex w-full flex-col gap-3">
           <Button
-            to={`/assets/${asset.id}`}
+            to={`/${type === "asset" ? "assets" : "kits"}/${item.id}`}
             width="full"
             variant="secondary"
-            data-test-id="viewAssetButton"
           >
-            View asset
+            View {type}
           </Button>
           <Button to={`/scanner`} width="full">
             Go to scanner
@@ -86,7 +99,7 @@ export default function QrSuccessfullLink() {
         </div>
       </div>
     </>
-  ) : null;
+  );
 }
 
 export const ErrorBoundary = () => <ErrorContent />;

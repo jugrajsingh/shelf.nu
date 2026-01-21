@@ -1,34 +1,22 @@
-import { Text, Link } from "@react-email/components";
+import { Text } from "@react-email/components";
 import type { BookingForEmail } from "../types";
 
 /** Footer used when sending normal user emails */
 export const UserFooter = ({ booking }: { booking: BookingForEmail }) => (
   <>
     <Text style={{ fontSize: "14px", color: "#344054" }}>
-      This email was sent to{" "}
-      <Link
-        style={{ color: "#EF6820" }}
-        href={`mailto:${booking.custodianUser!.email}`}
-      >
-        {booking.custodianUser!.email}
-      </Link>{" "}
-      because it is part of the workspace{" "}
+      This email was sent to {booking.custodianUser!.email} because it is part
+      of the workspace{" "}
       <span style={{ color: "#101828", fontWeight: "600" }}>
         "{booking.organization.name}"
       </span>
       . <br /> If you think you weren’t supposed to have received this email
-      please{" "}
-      <Link
-        style={{ color: "#344054", textDecoration: "underline" }}
-        href={`mailto:${booking.organization.owner.email}`}
-      >
-        contact the owner
-      </Link>{" "}
-      of the workspace.
+      please contact the owner ({booking.organization.owner.email}) of the
+      workspace.
     </Text>
     <Text style={{ marginBottom: "32px", fontSize: "14px", color: "#344054" }}>
       {" "}
-      © 2024 Shelf.nu
+      © 2026 Shelf.nu
     </Text>
   </>
 );
@@ -47,7 +35,7 @@ export const AdminFooter = ({ booking }: { booking: BookingForEmail }) => (
     </Text>
     <Text style={{ marginBottom: "32px", fontSize: "14px", color: "#344054" }}>
       {" "}
-      © 2024 Shelf.nu
+      © 2026 Shelf.nu
     </Text>
   </>
 );

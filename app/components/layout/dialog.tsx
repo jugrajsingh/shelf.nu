@@ -1,50 +1,107 @@
-import { useCallback, type ReactNode } from "react";
-import { useMatches, useNavigate } from "@remix-run/react";
+import type { ReactNode } from "react";
+import { useEffect, useRef } from "react";
+import ReactDOM from "react-dom";
+import { handleActivationKeyPress } from "~/utils/keyboard";
 import { tw } from "~/utils/tw";
 import { XIcon } from "../icons/library";
 import { Button } from "../shared/button";
 
 export const Dialog = ({
+  title,
   children,
   open,
-  noScroll,
+  onClose,
+  className,
+  headerClassName,
+  wrapperClassName,
 }: {
+  title: string | ReactNode;
   children: ReactNode;
   open: boolean;
-  noScroll: boolean;
+  onClose: () => void;
+  className?: string;
+  headerClassName?: string;
+  wrapperClassName?: string;
 }) => {
-  const matches = useMatches();
-  const prevRoute = matches[matches.length - 2];
-  const navigate = useNavigate();
-  const handleBackdropClose = useCallback(
-    (e: React.MouseEvent<HTMLDivElement>) => {
-      if (e.target !== e.currentTarget) return;
-      navigate(prevRoute);
-    },
-    [prevRoute, navigate]
-  );
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  const onCloseRef = useRef(onClose);
+  const previouslyFocusedElement = useRef<HTMLElement | null>(null);
+
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  }, [onClose]);
+
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (!dialog || !open) return;
+
+    previouslyFocusedElement.current =
+      (document.activeElement as HTMLElement | null) ?? null;
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        onCloseRef.current?.();
+      }
+    };
+
+    // Attach to document to capture ESC even when Select or other components are focused
+    document.addEventListener("keydown", handleKeyDown, { capture: true });
+
+    const focusTarget =
+      dialog.querySelector<HTMLElement>("[data-dialog-initial-focus]") ||
+      dialog.querySelector<HTMLElement>("[autofocus]") ||
+      dialog.querySelector<HTMLElement>(
+        'input,select,textarea,button,[href],[tabindex]:not([tabindex="-1"])'
+      ) ||
+      dialog;
+
+    focusTarget.focus();
+
+    return () => {
+      document.removeEventListener("keydown", handleKeyDown, { capture: true });
+      previouslyFocusedElement.current?.focus();
+      previouslyFocusedElement.current = null;
+    };
+  }, [open]);
 
   return open ? (
-    <div className="dialog-backdrop" onClick={handleBackdropClose}>
-      <dialog className="dialog" open={true}>
-        <div
-          className={tw(
-            " relative z-10 size-full  bg-white p-6 shadow-lg md:max-h-[85vh] md:rounded",
-            noScroll ? "md:h-[85vh]" : "md:overflow-y-auto"
-          )}
-        >
-          <Button
-            to={prevRoute}
-            variant="link"
-            className={
-              "absolute right-4 top-[16px] leading-none text-gray-500 md:right-6 md:top-[26px]"
-            }
+    <div
+      className={tw("dialog-backdrop", wrapperClassName)}
+      role="button"
+      tabIndex={0}
+      onClick={(event) => {
+        if (event.target === event.currentTarget) {
+          onClose();
+        }
+      }}
+      onKeyDown={handleActivationKeyPress(() => onClose())}
+    >
+      <dialog ref={dialogRef} className={tw("dialog", className)} open={open}>
+        <div className="flex h-full cursor-default flex-col bg-white">
+          <div
+            className={tw(
+              "dialog-header flex items-start justify-between bg-white px-6 py-3",
+              headerClassName
+            )}
           >
-            <XIcon />
-          </Button>
-          {children}
+            {title}
+            <Button
+              onClick={onClose}
+              variant="link"
+              className={"mt-2 leading-none text-gray-500 md:right-6"}
+              aria-label="Close dialog"
+            >
+              <XIcon />
+            </Button>
+          </div>
+          <div className="dialog-body grow overflow-auto">{children}</div>
         </div>
       </dialog>
     </div>
   ) : null;
 };
+
+export const DialogPortal = ({ children }: { children: ReactNode }) =>
+  ReactDOM.createPortal(children, document.body);

@@ -3,7 +3,11 @@ import Stripe from "stripe";
 import type { PriceWithProduct } from "~/components/subscription/prices";
 import { config } from "~/config/shelf.config";
 import { db } from "~/database/db.server";
-import { getOrganizationTierLimit } from "~/modules/tier/service.server";
+import { getOrganizationByUserId } from "~/modules/organization/service.server";
+import {
+  getOrganizationTierLimit,
+  updateUserTierId,
+} from "~/modules/tier/service.server";
 import { STRIPE_SECRET_KEY } from "./env";
 import type { ErrorLabel } from "./error";
 import { ShelfError } from "./error";
@@ -103,14 +107,19 @@ export async function createStripeCheckoutSession({
       },
     ];
 
+    const successUrl = await generateReturnUrl({
+      userId,
+      shelfTier,
+      intent,
+      domainUrl,
+    });
+
     const { url } = await stripe.checkout.sessions.create({
       mode: "subscription",
       payment_method_types: ["card"],
       line_items: lineItems,
-      success_url: `${domainUrl}/settings/subscription?success=true${
-        shelfTier === "tier_2" ? "&team=true" : ""
-      }`,
-      cancel_url: `${domainUrl}/settings/subscription?canceled=true`,
+      success_url: successUrl,
+      cancel_url: `${domainUrl}/account-details/subscription?canceled=true`,
       client_reference_id: userId,
       customer: customerId,
       ...(intent === "trial" && {
@@ -120,10 +129,10 @@ export async function createStripeCheckoutSession({
               missing_payment_method: "pause",
             },
           },
-          trial_period_days: 14,
+          trial_period_days: config.freeTrialDays,
         },
         payment_method_collection: "if_required",
-      }), // Add trial period if intent is trial
+      }),
     });
 
     if (!url) {
@@ -134,7 +143,6 @@ export async function createStripeCheckoutSession({
         label,
       });
     }
-
     return url;
   } catch (cause) {
     throw new ShelfError({
@@ -147,15 +155,79 @@ export async function createStripeCheckoutSession({
   }
 }
 
-/** Fetches prices and products from stripe */
+/**
+ * Fetches prices and products from Stripe. Returns empty arrays when premium features are disabled.
+ */
 export async function getStripePricesAndProducts() {
+  try {
+    if (!premiumIsEnabled) {
+      return {
+        month: [],
+        year: [],
+      };
+    }
+    if (!stripe) {
+      throw new ShelfError({
+        cause: null,
+        message: "Stripe not initialized",
+        label,
+      });
+    }
+
+    const pricesResponse = await stripe.prices.list({
+      active: true,
+      type: "recurring",
+      expand: ["data.product"],
+      limit: 100, // Increase limit to see more results
+    });
+
+    // Filter prices to only include those that should be shown on table and are not legacy
+    const filteredPrices = pricesResponse.data.filter(
+      (p) =>
+        p.metadata.show_on_table &&
+        p.metadata.show_on_table === "true" &&
+        p.metadata.legacy !== "true"
+    ) as PriceWithProduct[];
+
+    return groupPricesByInterval(filteredPrices);
+  } catch (cause) {
+    throw new ShelfError({
+      cause,
+      message:
+        "Something went wrong while fetching prices and products from Stripe. Please try again later or contact support.",
+      label,
+    });
+  }
+}
+
+/** Fetches prices and products from stripe */
+export async function getStripePricesForTrialPlanSelection() {
   try {
     const pricesResponse = await stripe.prices.list({
       active: true,
+      type: "recurring",
       expand: ["data.product"],
+      limit: 100, // Increase limit to see more results
     });
 
-    return groupPricesByInterval(pricesResponse.data as PriceWithProduct[]);
+    const groupedPrices = groupPricesByInterval(
+      pricesResponse.data as PriceWithProduct[]
+    );
+    // console.log("groupedPrices", groupedPrices.year);
+    return [
+      ...groupedPrices.month.filter(
+        (price) =>
+          price.product.metadata.shelf_tier === "tier_2" &&
+          price.metadata.show_on_table === "true" &&
+          price.metadata.legacy !== "true"
+      ),
+      ...groupedPrices.year.filter(
+        (price) =>
+          price.product.metadata.shelf_tier === "tier_2" &&
+          price.metadata.show_on_table === "true" &&
+          price.metadata.legacy !== "true"
+      ),
+    ];
   } catch (cause) {
     throw new ShelfError({
       cause,
@@ -182,13 +254,48 @@ function groupPricesByInterval(prices: PriceWithProduct[]) {
 
   // Sort the prices within each group by unit_amount
   for (const interval in groupedPrices) {
-    if (groupedPrices.hasOwnProperty(interval)) {
+    if (Object.prototype.hasOwnProperty.call(groupedPrices, interval)) {
       // @ts-ignore
       groupedPrices[interval].sort((a, b) => a.unit_amount - b.unit_amount);
     }
   }
 
   return groupedPrices;
+}
+
+/**
+ * We create the stripe customer on onboarding,
+ * however we keep this to double check in case something went wrong
+ * If the customerId is not found, we create a new customer in Stripe
+ * and return the customerId.
+ * @param user - The user object containing id, email, firstName, lastName, and customerId
+ * @returns The customerId of the user in Stripe
+ * @throws ShelfError if no customerId is found for the user
+ */
+export async function getOrCreateCustomerId(
+  user: Pick<User, "id" | "email" | "firstName" | "lastName" | "customerId">
+) {
+  /**
+   * We create the stripe customer on onboarding,
+   * however we keep this to double check in case something went wrong
+   */
+  const customerId = user.customerId
+    ? user.customerId
+    : await createStripeCustomer({
+        email: user.email,
+        name: `${user.firstName} ${user.lastName}`,
+        userId: user.id,
+      });
+
+  if (!customerId) {
+    throw new ShelfError({
+      cause: null,
+      message: "No customer ID found for user",
+      additionalData: { user },
+      label: "Subscription",
+    });
+  }
+  return customerId;
 }
 
 /** Creates customer entry in stripe */
@@ -214,6 +321,7 @@ export const createStripeCustomer = async ({
       await db.user.update({
         where: { id: userId },
         data: { customerId },
+        select: { id: true },
       });
 
       return customerId;
@@ -252,7 +360,7 @@ export async function createBillingPortalSession({
   try {
     const { url } = await stripe.billingPortal.sessions.create({
       customer: customerId,
-      return_url: `${process.env.SERVER_URL}/settings/subscription`,
+      return_url: `${process.env.SERVER_URL}/account-details/subscription`,
     });
 
     return { url };
@@ -265,34 +373,6 @@ export async function createBillingPortalSession({
       label,
     });
   }
-}
-
-export function getActiveProduct({
-  prices,
-  priceId,
-}: {
-  prices: {
-    [key: string]: PriceWithProduct[];
-  };
-  priceId: string | null;
-}) {
-  if (!priceId) return null;
-  // Check in the 'year' array
-  for (const priceObj of prices.year) {
-    if (priceObj.id === priceId) {
-      return priceObj.product;
-    }
-  }
-
-  // Check in the 'month' array
-  for (const priceObj of prices.month) {
-    if (priceObj.id === priceId) {
-      return priceObj.product;
-    }
-  }
-
-  // If no match is found, return null or throw an error, depending on your preference
-  return null;
 }
 
 /** Gets the customer's paid subscription */
@@ -378,12 +458,14 @@ export async function getDataFromStripeEvent(event: Stripe.Event) {
 export const disabledTeamOrg = async ({
   currentOrganization,
   organizations,
+  url,
 }: {
   organizations: Pick<
     Organization,
     "id" | "type" | "name" | "imageId" | "userId"
   >[];
   currentOrganization: Pick<Organization, "id" | "type">;
+  url: string;
 }) => {
   if (!premiumIsEnabled) return false;
   /**
@@ -391,12 +473,78 @@ export const disabledTeamOrg = async ({
    *
    * 1. The current organization is a team
    * 2. The current tier has to be tier_2. Anything else is not allowed
+   * 3. We need to check the url as the user should be allowed to access certain urls, even if the current org is a team org and they are Self service
    */
 
+  /** All account details routes should be accessible always */
+  if (url.includes("account-details")) return false;
   const tierLimit = await getOrganizationTierLimit({
     organizationId: currentOrganization.id,
     organizations,
   });
 
-  return currentOrganization.type === "TEAM" && tierLimit?.id !== "tier_2";
+  return (
+    currentOrganization.type === "TEAM" &&
+    ["free", "tier_1"].includes(tierLimit?.id)
+  );
 };
+
+/** Generates the redirect URL based on relevant data */
+async function generateReturnUrl({
+  userId,
+  shelfTier,
+  intent,
+  domainUrl,
+}: {
+  userId: User["id"];
+  shelfTier: "tier_1" | "tier_2" | "free" | "custom";
+  intent: "trial" | "subscribe";
+  domainUrl: string;
+}) {
+  /**
+   * Here we have a few cases:
+   * 1. If its trial and tier_2, and they dont own team workspaces we redirect them to create a team workspace - we can safely assume that is their first entrance
+   * 3. If its any other tier, we redirect them to /account-details/subscription
+   */
+
+  /** We do a small try/catch to prevent throwing as we just need to continue */
+  let userTeamOrg;
+  try {
+    userTeamOrg = await getOrganizationByUserId({
+      userId,
+      orgType: "TEAM",
+    });
+  } catch (_cause) {
+    userTeamOrg = null;
+  }
+
+  const urlSearchParams = new URLSearchParams({
+    success: "true",
+    team: shelfTier === "tier_2" ? "true" : "",
+    ...(intent === "trial" && { trial: "true" }),
+    ...(userTeamOrg && { hasExistingWorkspace: "true" }),
+  });
+
+  return shelfTier === "tier_2" && !userTeamOrg // If the user is on tier_2, and they dont already OWN a team org we redirect them to create a team workspace
+    ? `${domainUrl}/account-details/workspace/new?${urlSearchParams.toString()}`
+    : `${domainUrl}/account-details/subscription?${urlSearchParams.toString()}`;
+}
+
+/**
+ * Validates if the user's subscription is active based on their current tier
+ * and the provided subscription details. If the subscription is inactive
+ * and the user is not on the "free" tier, their tier is downgraded to "free."
+ */
+export async function validateSubscriptionIsActive({
+  user,
+  subscription,
+}: {
+  user: Pick<User, "id" | "skipSubscriptionCheck" | "tierId">;
+  subscription: Stripe.Subscription | null;
+}) {
+  if (user.skipSubscriptionCheck) return;
+
+  if (!subscription && user.tierId !== "free") {
+    await updateUserTierId(user.id, "free");
+  }
+}

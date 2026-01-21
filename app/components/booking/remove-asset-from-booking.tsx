@@ -1,7 +1,6 @@
 import type { Asset } from "@prisma/client";
-import { Form, useLoaderData } from "@remix-run/react";
+import { useLoaderData } from "react-router";
 import { Button } from "~/components/shared/button";
-
 import {
   AlertDialog,
   AlertDialogCancel,
@@ -12,15 +11,18 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "~/components/shared/modal";
-import { useBookingStatus } from "~/hooks/use-booking-status";
-import type { BookingWithCustodians } from "~/routes/_layout+/bookings";
+import { useBookingStatusHelpers } from "~/hooks/use-booking-status";
+import { useDisabled } from "~/hooks/use-disabled";
+import type { BookingWithCustodians } from "~/modules/booking/types";
 import { tw } from "~/utils/tw";
+import { Form } from "../custom-form";
 import { TrashIcon } from "../icons/library";
 
 export const RemoveAssetFromBooking = ({ asset }: { asset: Asset }) => {
   const { booking } = useLoaderData<{ booking: BookingWithCustodians }>();
+  const { isArchived, isCompleted } = useBookingStatusHelpers(booking.status);
+  const disabled = useDisabled();
 
-  const { isArchived, isCompleted } = useBookingStatus(booking);
   return (
     <AlertDialog>
       <AlertDialogTrigger asChild>
@@ -29,8 +31,7 @@ export const RemoveAssetFromBooking = ({ asset }: { asset: Asset }) => {
           data-test-id="deleteBookingButton"
           icon="trash"
           className={tw(
-            "justify-start rounded-sm px-2 py-1.5 text-sm font-medium text-gray-700 outline-none data-[disabled]:pointer-events-none data-[disabled]:opacity-50 hover:bg-slate-100 hover:text-gray-700",
-            isArchived || isCompleted ? "pointer-events-none opacity-50" : ""
+            "justify-start rounded-sm px-2 py-1.5 text-sm font-medium text-gray-700 outline-none   hover:bg-slate-100 hover:text-gray-700"
           )}
           title={
             isArchived || isCompleted
@@ -38,6 +39,7 @@ export const RemoveAssetFromBooking = ({ asset }: { asset: Asset }) => {
               : undefined
           }
           width="full"
+          disabled={disabled || isArchived || isCompleted}
         >
           Remove
         </Button>
@@ -60,12 +62,14 @@ export const RemoveAssetFromBooking = ({ asset }: { asset: Asset }) => {
         <AlertDialogFooter>
           <div className="flex justify-center gap-2">
             <AlertDialogCancel asChild>
-              <Button variant="secondary">Cancel</Button>
+              <Button variant="secondary" disabled={disabled}>
+                Cancel
+              </Button>
             </AlertDialogCancel>
 
             <Form method="post">
               <input type="hidden" name="assetId" value={asset.id} />
-              <Button name="intent" value="removeAsset">
+              <Button name="intent" value="removeAsset" disabled={disabled}>
                 Remove
               </Button>
             </Form>

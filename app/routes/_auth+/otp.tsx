@@ -1,31 +1,30 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type {
   ActionFunctionArgs,
   LoaderFunctionArgs,
   MetaFunction,
-} from "@remix-run/node";
-import { json, redirect } from "@remix-run/node";
-import {
-  Form,
-  useActionData,
-  useNavigation,
-  useSearchParams,
-} from "@remix-run/react";
+} from "react-router";
+import { data, redirect, useActionData, useFetcher } from "react-router";
 import { useZorm } from "react-zorm";
 import { z } from "zod";
-import Input from "~/components/forms/input";
+import { Form } from "~/components/custom-form";
+import { ShelfOTP } from "~/components/forms/otp-input";
 import { Button } from "~/components/shared/button";
+import { useSearchParams } from "~/hooks/search-params";
+import { useDisabled } from "~/hooks/use-disabled";
 import { verifyOtpAndSignin } from "~/modules/auth/service.server";
-import { setSelectedOrganizationIdCookie } from "~/modules/organization/context.server";
-import { getOrganizationByUserId } from "~/modules/organization/service.server";
+import {
+  getSelectedOrganization,
+  setSelectedOrganizationIdCookie,
+} from "~/modules/organization/context.server";
 import { createUser, findUserByEmail } from "~/modules/user/service.server";
+import { generateUniqueUsername } from "~/modules/user/utils.server";
 import { appendToMetaTitle } from "~/utils/append-to-meta-title";
 import { setCookie } from "~/utils/cookies.server";
 import { makeShelfError, notAllowedMethod } from "~/utils/error";
 import { isFormProcessing } from "~/utils/form";
-import { isErrorResponse } from "~/utils/http";
 import {
-  data,
+  payload,
   error,
   getActionMethod,
   parseData,
@@ -34,7 +33,7 @@ import {
 import { validEmail } from "~/utils/misc";
 import { getOtpPageData, type OtpVerifyMode } from "~/utils/otp";
 import { tw } from "~/utils/tw";
-import { randomUsernameFromEmail } from "~/utils/user";
+import type { action as resendOtpAction } from "./resend-otp";
 
 export function loader({ context, request }: LoaderFunctionArgs) {
   const { searchParams } = new URL(request.url);
@@ -45,7 +44,7 @@ export function loader({ context, request }: LoaderFunctionArgs) {
     return redirect("/assets");
   }
 
-  return json(data({ title }));
+  return payload({ title });
 }
 
 const OtpSchema = z.object({
@@ -73,25 +72,24 @@ export async function action({ context, request }: ActionFunctionArgs) {
         const userExists = Boolean(await findUserByEmail(email));
 
         if (!userExists) {
+          const username = await generateUniqueUsername(authSession.email);
           await createUser({
             ...authSession,
-            username: randomUsernameFromEmail(authSession.email),
+            username,
           });
         }
-
-        const personalOrganization = await getOrganizationByUserId({
-          userId: authSession.userId,
-          orgType: "PERSONAL",
-        });
 
         // Setting the auth session and redirecting user to assets page
         context.setSession(authSession);
 
+        const { organizationId } = await getSelectedOrganization({
+          userId: authSession.userId,
+          request,
+        });
+
         return redirect(safeRedirect("/assets"), {
           headers: [
-            setCookie(
-              await setSelectedOrganizationIdCookie(personalOrganization.id)
-            ),
+            setCookie(await setSelectedOrganizationIdCookie(organizationId)),
           ],
         });
       }
@@ -100,13 +98,15 @@ export async function action({ context, request }: ActionFunctionArgs) {
     throw notAllowedMethod(method);
   } catch (cause) {
     const reason = makeShelfError(cause);
-    return json(error(reason), { status: reason.status });
+    return data(error(reason), { status: reason.status });
   }
 }
 
 export const meta: MetaFunction<typeof loader> = ({ data }) => [
   { title: data ? appendToMetaTitle(data.title) : "" },
 ];
+
+type resendAction = typeof resendOtpAction;
 
 export default function OtpPage() {
   const [message, setMessage] = useState<{
@@ -115,40 +115,26 @@ export default function OtpPage() {
   }>();
   const data = useActionData<typeof action>();
   const [searchParams] = useSearchParams();
+  const fetcher = useFetcher<resendAction>();
 
   const zo = useZorm("otpForm", OtpSchema);
-  const transition = useNavigation();
-  const disabled = isFormProcessing(transition.state);
+  const fetcherDisabled = isFormProcessing(fetcher.state);
+  const disabled = useDisabled();
 
   const email = searchParams.get("email") || "";
   const mode = searchParams.get("mode") as OtpVerifyMode;
   const pageData = getOtpPageData(mode);
 
-  async function handleResendOtp() {
+  function handleResendOtp() {
     const formData = new FormData();
     formData.append("email", email);
     formData.append("mode", mode);
 
     try {
-      const response = await fetch("/send-otp", {
-        method: "post",
-        body: formData,
+      void fetcher.submit(formData, {
+        method: "POST",
+        action: "/resend-otp",
       });
-
-      if (response.status === 200) {
-        setMessage({
-          message: "Email sent successfully. Please check your inbox.",
-          type: "success",
-        });
-      } else {
-        const data = await response.json();
-        setMessage({
-          message: isErrorResponse(data)
-            ? data.error.message
-            : "Something went wrong. Please try again!",
-          type: "error",
-        });
-      }
     } catch {
       setMessage({
         message: "Something went wrong. Please try again.",
@@ -157,6 +143,23 @@ export default function OtpPage() {
     }
   }
 
+  /** Handle success and error state when resending with fetcher */
+  useEffect(() => {
+    if (fetcher?.data) {
+      if (fetcher.data.error) {
+        setMessage({
+          message: fetcher.data.error.message,
+          type: "error",
+        });
+      } else {
+        setMessage({
+          message: "Email sent successfully. Please check your inbox.",
+          type: "success",
+        });
+      }
+    }
+  }, [fetcher]);
+
   return (
     <>
       <pageData.SubHeading email={email} />
@@ -164,18 +167,14 @@ export default function OtpPage() {
       <div className="mt-2 flex min-h-full flex-col justify-center">
         <div className="mx-auto w-full max-w-md px-8">
           <Form ref={zo.ref} method="post" className="space-y-6">
-            <Input name="otp" label="Code" required placeholder="133734" />
+            <ShelfOTP error={data?.error.message} />
+
             <input
               type="hidden"
               name="email"
               value={searchParams.get("email") || ""}
             />
 
-            {data?.error.message ? (
-              <div className="!mt-1  text-sm text-error-500">
-                {data.error.message}
-              </div>
-            ) : null}
             {message?.message && (
               <p
                 className={tw(
@@ -193,7 +192,7 @@ export default function OtpPage() {
               data-test-id="create-account"
               type="submit"
               className="w-full "
-              disabled={disabled}
+              disabled={fetcherDisabled || disabled}
             >
               {pageData.buttonTitle}
             </Button>
@@ -204,7 +203,9 @@ export default function OtpPage() {
             onClick={handleResendOtp}
           >
             Did not receive a code?{" "}
-            <span className="text-primary-500">Send again</span>
+            <span className="text-primary-500">
+              {fetcherDisabled ? "Sending code..." : "Send again"}
+            </span>
           </button>
         </div>
       </div>

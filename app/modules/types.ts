@@ -1,7 +1,3 @@
-export type WithDateFields<T, DateType> = {
-  [K in keyof T]: K extends "createdAt" | "updatedAt" ? DateType : T[K];
-};
-
 /**
  * Pass this type to useLoaderData when fetching data from an index response which includes search/filter
  */
@@ -19,6 +15,11 @@ export interface SearchableIndexResponse {
   /** Tooltip for the search field */
   searchFieldTooltip?: {
     title: string;
-    text: string;
+    text: string; // Supports markdown
   };
 }
+
+export type RouteHandleWithName = {
+  name?: string;
+  [key: string]: any;
+};

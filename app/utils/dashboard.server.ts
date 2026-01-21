@@ -95,7 +95,7 @@ export function totalAssetsAtEndOfEachMonth({ assets }: { assets: Asset[] }) {
 
   // Get the total of assets created in each month
   let totalAssets = 0;
-  for (let asset of assets) {
+  for (const asset of assets) {
     const assetCreatedDate = new Date(asset.createdAt);
     const assetCreatedMonth = assetCreatedDate.getMonth();
     const assetCreatedYear = assetCreatedDate.getFullYear();
@@ -150,23 +150,71 @@ function hasCustody(asset: Asset): asset is Asset & { custody: Custody } {
 
 export function getCustodiansOrderedByTotalCustodies({
   assets,
+  bookings,
 }: {
   assets: Asset[];
+  bookings: Prisma.BookingGetPayload<{
+    include: {
+      custodianTeamMember: true;
+      custodianUser: true;
+      assets: true;
+    };
+  }>[];
 }) {
   const assetsWithCustody = assets.filter(
     (asset) => asset.custody && asset.custody.custodian
   );
-  const allCustodiansSet = new Set(
-    assetsWithCustody.filter(hasCustody).map((asset) => asset.custody.custodian)
-  );
-  const allCustodians = Array.from(allCustodiansSet).filter(Boolean);
 
-  let custodianCounts: { [key: string]: number } = {};
+  /** All custodians with directly assigned custody via assets */
+  const allDirectCustodians = Array.from(
+    new Set(
+      assetsWithCustody
+        .filter(hasCustody)
+        .map((asset) => asset.custody.custodian)
+    )
+  ).filter(Boolean);
 
-  for (let asset of assetsWithCustody) {
+  /** All custodians with custody via bookings */
+  const allBookerCustodians = Array.from(
+    new Set(
+      bookings.map((booking) =>
+        booking.custodianUser
+          ? {
+              id: booking.custodianUserId,
+              userId: booking.custodianUserId,
+              user: booking.custodianUser,
+            }
+          : {
+              id: booking.custodianTeamMemberId,
+              ...booking.custodianTeamMember,
+            }
+      )
+    )
+  ).filter(Boolean);
+
+  const allCustodians = [...allDirectCustodians, ...allBookerCustodians];
+  const custodianCounts: { [key: string]: number } = {};
+
+  /** Count normal custodies */
+  for (const asset of assetsWithCustody) {
     if (asset.custody) {
-      let custodianId = asset.custody.custodian.id;
-      custodianCounts[custodianId] = (custodianCounts[custodianId] || 0) + 1;
+      // will use userId to map and show consolidated hold of assets (through bookings or direct custodies) of a team member, in case of NRM will use custodian id
+      const userId = asset.custody.custodian.userId
+        ? asset.custody.custodian.userId
+        : asset.custody.custodian.id;
+      custodianCounts[userId] = (custodianCounts[userId] || 0) + 1;
+    }
+  }
+
+  /** Count custodies via bookings */
+  for (const booking of bookings) {
+    if (booking.custodianUserId) {
+      custodianCounts[booking.custodianUserId] =
+        (custodianCounts[booking.custodianUserId] || 0) + booking.assets.length;
+    } else if (booking.custodianTeamMemberId) {
+      custodianCounts[booking.custodianTeamMemberId] =
+        (custodianCounts[booking.custodianTeamMemberId] || 0) +
+        booking.assets.length;
     }
   }
 
@@ -177,8 +225,8 @@ export function getCustodiansOrderedByTotalCustodies({
     ([id, count]) => ({
       id,
       count,
-      custodian: allCustodians.find(
-        (custodian) => custodian.id === id
+      custodian: allCustodians.find((custodian) =>
+        custodian.userId ? custodian.userId === id : custodian.id === id
       ) as TeamMemberWithUser,
     })
   );
@@ -242,8 +290,8 @@ export function getMostScannedAssetsCategories({
     };
   } = {};
 
-  for (let asset of assetsWithScanCount) {
-    let category = asset.category?.name || "Uncategorized";
+  for (const asset of assetsWithScanCount) {
+    const category = asset.category?.name || "Uncategorized";
     if (!assetsByCategory[category]) {
       assetsByCategory[category] = {
         category,
@@ -279,13 +327,14 @@ export function groupAssetsByStatus({ assets }: { assets: Asset[] }) {
     { status: string; assets: Asset[]; color: string }
   > = {};
 
-  for (let asset of assets) {
-    let status = asset.status;
+  for (const asset of assets) {
+    const status = asset.status;
     if (!assetsByStatus[status]) {
+      const colors = assetStatusColorMap(status);
       assetsByStatus[status] = {
         status: userFriendlyAssetStatus(status),
         assets: [],
-        color: assetStatusColorMap(status),
+        color: colors.text, // Use text color for charts (more saturated/visible)
       };
     }
     assetsByStatus[status].assets.push(asset);
@@ -313,9 +362,9 @@ export function groupAssetsByCategory({ assets }: { assets: Asset[] }) {
     { category: string; assets: Asset[]; id: string }
   > = {};
 
-  for (let asset of assets) {
-    let category = asset.category?.name || "Uncategorized";
-    let id = asset?.category?.id || "Uncategorized";
+  for (const asset of assets) {
+    const category = asset.category?.name || "Uncategorized";
+    const id = asset?.category?.id || "Uncategorized";
     if (!assetsByCategory[category]) {
       assetsByCategory[category] = {
         category,
@@ -391,6 +440,7 @@ export async function checklistOptions({
       db.customField.count({
         where: {
           organizationId,
+          deletedAt: null,
         },
       }),
     ]);

@@ -1,5 +1,6 @@
+import type { ChangeEvent } from "react";
 import { useState } from "react";
-import { useNavigation } from "@remix-run/react";
+import { useNavigation } from "react-router";
 import { isFormProcessing } from "~/utils/form";
 import Input from "../forms/input";
 import { Button } from "../shared/button";
@@ -9,7 +10,7 @@ export const GenerateBatchQr = () => {
   const [batchName, setBatchName] = useState<string>("");
   const navigation = useNavigation();
   const disabled = isFormProcessing(navigation.state);
-  function handleChange(e: React.ChangeEvent<HTMLInputElement>) {
+  function handleChange(e: ChangeEvent<HTMLInputElement>) {
     const value = Number(e.target.value);
     if (value < 1) {
       setAmount(1);
@@ -45,7 +46,7 @@ export const GenerateBatchQr = () => {
           to={`/admin-dashboard/qrs/codes.zip?${new URLSearchParams({
             amount: String(amount),
             batchName,
-          })}`}
+          })}-${new Date().getTime()}`}
           reloadDocument
           download
           variant="secondary"

@@ -1,34 +1,31 @@
+import { useAtomValue } from "jotai";
 import type {
   ActionFunctionArgs,
   LoaderFunctionArgs,
   MetaFunction,
-} from "@remix-run/node";
-import {
-  json,
-  redirect,
-  redirectDocument,
-  unstable_createMemoryUploadHandler,
-  unstable_parseMultipartFormData,
-} from "@remix-run/node";
-import { invariant } from "framer-motion";
-import { useAtomValue } from "jotai";
+} from "react-router";
+import { data, redirect, redirectDocument } from "react-router";
 import { dynamicTitleAtom } from "~/atoms/dynamic-title-atom";
-
 import Header from "~/components/layout/header";
 import {
   LocationForm,
   NewLocationFormSchema,
 } from "~/components/location/form";
 
-import { createLocation } from "~/modules/location/service.server";
+import { db } from "~/database/db.server";
+import { getLocationsForCreateAndEdit } from "~/modules/asset/service.server";
+import {
+  createLocation,
+  updateLocationImage,
+} from "~/modules/location/service.server";
 import { appendToMetaTitle } from "~/utils/append-to-meta-title";
 import { sendNotification } from "~/utils/emitter/send-notification.server";
 import { makeShelfError } from "~/utils/error";
-import { data, error, parseData } from "~/utils/http.server";
+import { payload, error, parseData } from "~/utils/http.server";
 import {
   PermissionAction,
   PermissionEntity,
-} from "~/utils/permissions/permission.validator.server";
+} from "~/utils/permissions/permission.data";
 import { requirePermission } from "~/utils/roles.server";
 const title = "New Location";
 
@@ -37,21 +34,26 @@ export async function loader({ context, request }: LoaderFunctionArgs) {
   const { userId } = authSession;
 
   try {
-    await requirePermission({
+    const { organizationId } = await requirePermission({
       userId: authSession.userId,
       request,
       entity: PermissionEntity.location,
       action: PermissionAction.create,
     });
 
+    const { locations, totalLocations } = await getLocationsForCreateAndEdit({
+      organizationId,
+      request,
+    });
+
     const header = {
       title,
     };
 
-    return json(data({ header }));
+    return payload({ header, locations, totalLocations });
   } catch (cause) {
     const reason = makeShelfError(cause, { userId });
-    throw json(error(reason), { status: reason.status });
+    throw data(error(reason), { status: reason.status });
   }
 }
 
@@ -61,9 +63,8 @@ export const meta: MetaFunction<typeof loader> = ({ data }) => [
 
 export const handle = {
   breadcrumb: () => <span>{title}</span>,
+  name: "locations.new",
 };
-
-export const MAX_SIZE = 1024 * 1024 * 4; // 4MB
 
 export async function action({ context, request }: ActionFunctionArgs) {
   const authSession = context.getSession();
@@ -85,7 +86,7 @@ export async function action({ context, request }: ActionFunctionArgs) {
      */
     const clonedRequest = request.clone();
 
-    const payload = parseData(
+    const parsedData = parseData(
       await clonedRequest.formData(),
       NewLocationFormSchema,
       {
@@ -93,16 +94,14 @@ export async function action({ context, request }: ActionFunctionArgs) {
       }
     );
 
-    const { name, description, address, addAnother } = payload;
-    /** This checks if tags are passed and build the  */
-
-    const formDataFile = await unstable_parseMultipartFormData(
-      request,
-      unstable_createMemoryUploadHandler({ maxPartSize: MAX_SIZE })
-    );
-
-    const file = formDataFile.get("image") as File | null;
-    invariant(file instanceof File, "file not the right type");
+    const {
+      name,
+      description,
+      address,
+      addAnother,
+      parentId,
+      preventRedirect,
+    } = parsedData;
 
     const location = await createLocation({
       name,
@@ -110,8 +109,25 @@ export async function action({ context, request }: ActionFunctionArgs) {
       address,
       userId: authSession.userId,
       organizationId,
-      image: file || null,
+      parentId,
     });
+
+    await updateLocationImage({
+      request,
+      locationId: location.id,
+      organizationId,
+    });
+
+    const locationWithImage =
+      (await db.location.findUnique({
+        where: { id: location.id, organizationId },
+        select: {
+          id: true,
+          name: true,
+          thumbnailUrl: true,
+          imageUrl: true,
+        },
+      })) ?? location;
 
     sendNotification({
       title: "Location created",
@@ -119,6 +135,10 @@ export async function action({ context, request }: ActionFunctionArgs) {
       icon: { name: "success", variant: "success" },
       senderId: authSession.userId,
     });
+
+    if (preventRedirect === "true") {
+      return data(payload({ success: true, location: locationWithImage }));
+    }
 
     /** If the user clicked add-another, reload the document to clear the form */
     if (addAnother) {
@@ -128,7 +148,7 @@ export async function action({ context, request }: ActionFunctionArgs) {
     return redirect(`/locations/${location.id}`);
   } catch (cause) {
     const reason = makeShelfError(cause, { userId });
-    return json(error(reason), { status: reason.status });
+    return data(error(reason), { status: reason.status });
   }
 }
 
@@ -136,11 +156,11 @@ export default function NewLocationPage() {
   const title = useAtomValue(dynamicTitleAtom);
 
   return (
-    <>
+    <div className="relative">
       <Header title={title ? title : "Untitled location"} />
       <div>
         <LocationForm />
       </div>
-    </>
+    </div>
   );
 }

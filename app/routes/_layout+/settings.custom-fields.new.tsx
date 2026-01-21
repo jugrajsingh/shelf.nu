@@ -1,6 +1,6 @@
-import type { LoaderFunctionArgs, MetaFunction } from "@remix-run/node";
-import { json, redirect } from "@remix-run/node";
 import { useAtomValue } from "jotai";
+import type { LoaderFunctionArgs, MetaFunction } from "react-router";
+import { data, redirect } from "react-router";
 
 import { dynamicTitleAtom } from "~/atoms/dynamic-title-atom";
 import {
@@ -8,20 +8,20 @@ import {
   NewCustomFieldFormSchema,
 } from "~/components/custom-fields/form";
 import Header from "~/components/layout/header";
-import { getAllEntriesForCreateAndEdit } from "~/modules/asset/service.server";
+import { getCategoriesForCreateAndEdit } from "~/modules/asset/service.server";
 
 import { createCustomField } from "~/modules/custom-field/service.server";
-import { assertUserCanCreateMoreCustomFields } from "~/modules/tier/service.server";
 import { appendToMetaTitle } from "~/utils/append-to-meta-title";
 import { sendNotification } from "~/utils/emitter/send-notification.server";
 import { makeShelfError } from "~/utils/error";
-import { data, error, parseData } from "~/utils/http.server";
+import { payload, error, parseData } from "~/utils/http.server";
 
 import {
   PermissionAction,
   PermissionEntity,
-} from "~/utils/permissions/permission.validator.server";
+} from "~/utils/permissions/permission.data";
 import { requirePermission } from "~/utils/roles.server";
+import { assertUserCanCreateMoreCustomFields } from "~/utils/subscription.server";
 
 const title = "New Custom Field";
 
@@ -42,7 +42,7 @@ export async function loader({ context, request }: LoaderFunctionArgs) {
       organizationId,
     });
 
-    const { categories, totalCategories } = await getAllEntriesForCreateAndEdit(
+    const { categories, totalCategories } = await getCategoriesForCreateAndEdit(
       {
         organizationId,
         request,
@@ -53,16 +53,15 @@ export async function loader({ context, request }: LoaderFunctionArgs) {
       title,
     };
 
-    return json(
-      data({
-        header,
-        categories,
-        totalCategories,
-      })
-    );
+    return payload({
+      header,
+      categories,
+      totalCategories,
+    });
   } catch (cause) {
     const reason = makeShelfError(cause, { userId });
-    throw json(error(reason), { status: reason.status });
+
+    throw data(error(reason), { status: reason.status });
   }
 }
 
@@ -121,7 +120,7 @@ export async function action({ context, request }: LoaderFunctionArgs) {
     return redirect(`/settings/custom-fields`);
   } catch (cause) {
     const reason = makeShelfError(cause, { userId });
-    return json(error(reason), { status: reason.status });
+    return data(error(reason), { status: reason.status });
   }
 }
 

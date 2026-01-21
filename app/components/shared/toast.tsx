@@ -9,6 +9,7 @@ import {
 } from "~/atoms/notifications";
 import { tw } from "~/utils/tw";
 import { iconsMap } from "./icons-map";
+import When from "../when/when";
 
 export const Toaster = () => {
   const [, clearNotification] = useAtom(clearNotificationAtom);
@@ -42,6 +43,8 @@ export const Toaster = () => {
         )}
         open={open}
         onOpenChange={clearNotification}
+        aria-live="polite"
+        aria-atomic="true"
       >
         <div>
           <div
@@ -58,15 +61,19 @@ export const Toaster = () => {
           <Toast.Title className=" text-text-sm font-semibold text-gray-900 ">
             {title}
           </Toast.Title>
-          <Toast.Description className="text-gray-600">
-            {message}
-          </Toast.Description>
+
+          <When truthy={!!message}>
+            <Toast.Description className="text-gray-600">
+              {message}
+            </Toast.Description>
+          </When>
         </div>
 
         <Toast.Close
           className="flex"
           onClick={clearNotification}
           data-test-id="closeToast"
+          aria-label="Close notification"
         >
           {iconsMap["x"]}
         </Toast.Close>

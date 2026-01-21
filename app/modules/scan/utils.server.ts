@@ -1,16 +1,27 @@
-import type { Scan } from "@prisma/client";
+import type { Qr, Scan, User, UserOrganization } from "@prisma/client";
 import parser from "ua-parser-js";
-import { getDateTimeFormat } from "~/utils/client-hints";
 import { ShelfError } from "~/utils/error";
+
+function isValidUser(
+  userOrganizations: UserOrganization[] | null | undefined,
+  organizationId: string | null | undefined
+) {
+  if (!userOrganizations || !organizationId) {
+    return false;
+  }
+  return userOrganizations.find((uo) => uo?.organizationId === organizationId);
+}
 
 export function parseScanData({
   scan,
   userId,
-  request,
 }: {
-  scan: Scan | null;
+  scan:
+    | (Scan & {
+        user: (User & { userOrganizations: UserOrganization[] | null }) | null;
+      } & { qr: Qr | null })
+    | null;
   userId: string;
-  request: Request;
 }) {
   try {
     /**
@@ -19,22 +30,23 @@ export function parseScanData({
      * 2. User - Scanned by: You || Unknown
      */
     if (scan) {
-      const scannedBy = scan.userId === userId ? "You" : "Unknown";
+      let scannedBy = scan.userId === userId ? "You" : "Unknown";
+      const user = scan?.user;
+      scannedBy =
+        user && isValidUser(user?.userOrganizations, scan?.qr?.organizationId)
+          ? `${user.firstName} ${user.lastName}(${user.email})`
+          : "Unknown";
       const coordinates =
         scan.latitude && scan.longitude
           ? `${scan.latitude}, ${scan.longitude}`
           : "Unknown location";
 
-      const dateTime = getDateTimeFormat(request, {
-        dateStyle: "short",
-        timeStyle: "short",
-      }).format(scan.createdAt);
       const ua = parser(scan.userAgent || "");
 
       return {
         scannedBy,
         coordinates,
-        dateTime,
+        dateTime: scan.createdAt,
         ua,
         manuallyGenerated: scan.manuallyGenerated,
       };

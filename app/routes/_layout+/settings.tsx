@@ -1,27 +1,52 @@
-import type { MetaFunction } from "@remix-run/node";
-import { json } from "@remix-run/node";
-import { Link, Outlet, useRouteLoaderData } from "@remix-run/react";
+import type { LoaderFunctionArgs, MetaFunction } from "react-router";
+import { data, Link, Outlet, useLoaderData, useMatches } from "react-router";
 import { ErrorContent } from "~/components/errors";
 import Header from "~/components/layout/header";
 import HorizontalTabs from "~/components/layout/horizontal-tabs";
-import { useUserIsSelfService } from "~/hooks/user-user-is-self-service";
-import type { loader as layoutLoader } from "~/routes/_layout+/_layout";
+import When from "~/components/when/when";
+import { useUserRoleHelper } from "~/hooks/user-user-role-helper";
+import type { RouteHandleWithName } from "~/modules/types";
 import { appendToMetaTitle } from "~/utils/append-to-meta-title";
-import { data } from "~/utils/http.server";
+import { makeShelfError } from "~/utils/error";
+import { payload, error } from "~/utils/http.server";
+import { isPersonalOrg } from "~/utils/organization";
+import {
+  PermissionAction,
+  PermissionEntity,
+} from "~/utils/permissions/permission.data";
+import { requirePermission } from "~/utils/roles.server";
 
 export const handle = {
   breadcrumb: () => <Link to="/settings">Settings</Link>,
 };
 
-export function loader() {
-  const title = "Settings";
-  const subHeading = "Manage your preferences here.";
-  const header = {
-    title,
-    subHeading,
-  };
+export async function loader({ context, request }: LoaderFunctionArgs) {
+  const authSession = context.getSession();
+  const { userId } = authSession;
 
-  return json(data({ header }));
+  try {
+    const { currentOrganization } = await requirePermission({
+      userId: authSession.userId,
+      request,
+      entity: PermissionEntity.generalSettings,
+      action: PermissionAction.read,
+    });
+
+    const title = "Settings";
+    const subHeading = "Manage your preferences here.";
+    const header = {
+      title,
+      subHeading,
+    };
+
+    return payload({
+      header,
+      _isPersonalOrg: isPersonalOrg(currentOrganization),
+    });
+  } catch (cause) {
+    const reason = makeShelfError(cause, { userId });
+    throw data(error(reason), { status: reason.status });
+  }
 }
 
 export const meta: MetaFunction<typeof loader> = ({ data }) => [
@@ -31,37 +56,38 @@ export const meta: MetaFunction<typeof loader> = ({ data }) => [
 export const shouldRevalidate = () => false;
 
 export default function SettingsPage() {
+  const { _isPersonalOrg } = useLoaderData<typeof loader>();
   let items = [
-    { to: "account", content: "Account" },
     { to: "general", content: "General" },
-    { to: "workspace", content: "Workspaces" },
+    ...(!_isPersonalOrg ? [{ to: "bookings", content: "Bookings" }] : []),
     { to: "custom-fields", content: "Custom fields" },
     { to: "team", content: "Team" },
   ];
 
-  const userIsSelfService = useUserIsSelfService();
+  const { isBaseOrSelfService } = useUserRoleHelper();
   /** If user is self service, remove the extra items */
-  if (userIsSelfService) {
+  if (isBaseOrSelfService) {
     items = items.filter(
-      (item) => !["custom-fields", "team", "general"].includes(item.to)
+      (item) =>
+        !["custom-fields", "team", "general", "bookings"].includes(item.to)
     );
   }
 
-  const enablePremium = useRouteLoaderData<typeof layoutLoader>(
-    "routes/_layout+/_layout"
-  )?.enablePremium;
-
-  if (enablePremium && !userIsSelfService) {
-    items.push({ to: "subscription", content: "Subscription" });
-  }
-
+  const matches = useMatches();
+  const currentRoute: RouteHandleWithName = matches[matches.length - 1];
   return (
     <>
       <Header hidePageDescription />
-      <HorizontalTabs items={items} />
-      <div>
-        <Outlet />
-      </div>
+      <When
+        truthy={
+          !["$userId.assets", "$userId.bookings"].includes(
+            currentRoute?.handle?.name
+          )
+        }
+      >
+        <HorizontalTabs items={items} />
+      </When>
+      <Outlet />
     </>
   );
 }

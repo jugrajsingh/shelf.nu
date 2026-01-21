@@ -1,8 +1,8 @@
-import type { Params } from "@remix-run/react";
-import { json } from "react-router";
+import { data, type Params } from "react-router";
 import { parseFormAny } from "react-zorm";
 import type { ZodType } from "zod";
 import { sendNotification } from "./emitter/send-notification.server";
+import { SERVER_URL, URL_SHORTENER } from "./env";
 import type { Options } from "./error";
 import {
   ShelfError,
@@ -28,6 +28,38 @@ export function makeRedirectToFromHere(request: Request) {
 export function getRedirectTo(request: Request, defaultRedirectTo = "/") {
   const url = new URL(request.url);
   return safeRedirect(url.searchParams.get("redirectTo"), defaultRedirectTo);
+}
+
+/**
+ * Get the pathname and search params from the Referer header.
+ *
+ * This is useful for redirecting users back to the page they came from
+ * after completing an action (e.g., editing an entity), while preserving
+ * their search/filter context.
+ *
+ * @param request - The request object
+ * @returns The pathname + search from the referer header, or null if not available or invalid
+ *
+ * @example
+ * // User navigates from /assets?search=laptop&status=AVAILABLE to /assets/123/edit
+ * const refererPath = getRefererPath(request);
+ * // returns "/assets?search=laptop&status=AVAILABLE"
+ *
+ * redirect(safeRedirect(refererPath, `/assets/${id}`));
+ */
+export function getRefererPath(request: Request): string | null {
+  const referer = request.headers.get("referer");
+  if (!referer) {
+    return null;
+  }
+
+  try {
+    const url = new URL(referer);
+    return `${url.pathname}${url.search}`;
+  } catch {
+    // Invalid URL in referer header
+    return null;
+  }
 }
 
 export function isGet(request: Request) {
@@ -128,7 +160,7 @@ export function getParams<Schema extends ZodType<any, any, any>>(
     });
   } catch (cause) {
     const reason = cause instanceof ShelfError ? cause : makeShelfError(cause);
-    throw json(error(reason), { status: 400 });
+    throw data(error(reason), { status: 400 });
   }
 }
 
@@ -155,12 +187,23 @@ export function safeRedirect(
   to: FormDataEntryValue | string | null | undefined,
   defaultRedirect = "/"
 ) {
-  if (
-    !to ||
-    typeof to !== "string" ||
-    !to.startsWith("/") ||
-    to.startsWith("//")
-  ) {
+  /** List of domains we allow to redirect to
+   */
+  const safeList = [SERVER_URL, `https://${URL_SHORTENER}`];
+
+  if (!to || typeof to !== "string" || to.startsWith("//")) {
+    return defaultRedirect;
+  }
+
+  // Block internal Remix routes (manifest, etc.) from being used as redirects
+  // These are framework-internal URLs created by lazy route discovery
+  if (to.startsWith("/__")) {
+    return defaultRedirect;
+  }
+
+  // Check if the URL starts with any of the safe domains
+  const isSafeDomain = safeList.some((safeUrl) => to.startsWith(safeUrl));
+  if (!to.startsWith("/") && !isSafeDomain) {
     return defaultRedirect;
   }
 
@@ -177,12 +220,12 @@ export type ResponsePayload = Record<string, unknown> | null;
  * @param data - The data to return
  * @returns The normalized data with `error` key set to `null`
  */
-export function data<T extends ResponsePayload>(data: T) {
+export function payload<T extends ResponsePayload>(data: T) {
   return { error: null, ...data };
 }
 
 export type DataResponse<T extends ResponsePayload = ResponsePayload> =
-  ReturnType<typeof data<T>>;
+  ReturnType<typeof payload<T>>;
 
 /**
  * Create an error response payload.
@@ -192,13 +235,16 @@ export type DataResponse<T extends ResponsePayload = ResponsePayload> =
  * @param cause - The error that has been catch
  * @returns The normalized error with `error` key set to the error
  */
-export function error(cause: ShelfError) {
-  Logger.error(cause);
+export function error(cause: ShelfError, shouldSendNotification = true) {
+  if (cause.label !== "Request aborted") {
+    Logger.error(cause);
+  }
 
-  // TODO: @DonKoko maybe globally rethink this?
   if (
+    cause.label !== "Request aborted" &&
     cause.additionalData?.userId &&
-    typeof cause.additionalData?.userId === "string"
+    typeof cause.additionalData?.userId === "string" &&
+    shouldSendNotification
   ) {
     sendNotification({
       title: cause.title || "Oops! Something went wrong",

@@ -1,5 +1,5 @@
 # Base Node image
-FROM node:20-bookworm-slim AS base
+FROM node:22-bookworm-slim AS base
 
 # Set for base and all layer that inherit from it
 ENV PORT="8080"
@@ -11,6 +11,7 @@ WORKDIR /src
 RUN apt-get update && \
     apt-get install -y openssl && \
     rm -rf /var/lib/apt/lists/*
+
 
 # Install all node_modules, including dev dependencies
 FROM base AS deps
@@ -37,6 +38,7 @@ COPY --from=build /src/app/database /src/app/database
 COPY --from=build /src/build /src/build
 COPY --from=build /src/package.json /src/package.json
 COPY --from=build /src/start.sh /src/start.sh
+
 RUN chmod +x /src/start.sh
 
 ENTRYPOINT [ "/src/start.sh" ]

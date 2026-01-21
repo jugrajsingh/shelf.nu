@@ -1,5 +1,6 @@
-import { useLoaderData } from "@remix-run/react";
+import { useLoaderData } from "react-router";
 import { HelpIcon } from "~/components/icons/library";
+import { MarkdownViewer } from "~/components/markdown/markdown-viewer";
 import {
   Tooltip,
   TooltipContent,
@@ -23,9 +24,9 @@ export const SearchFieldTooltip = () => {
             <h6 className="mb-1 text-xs font-semibold text-gray-700">
               {searchFieldTooltip.title}
             </h6>
-            <p className="text-xs font-medium text-gray-500">
-              {searchFieldTooltip.text}
-            </p>
+            <div className="text-xs font-medium text-gray-500">
+              <MarkdownViewer content={searchFieldTooltip.text} />
+            </div>
           </div>
         </TooltipContent>
       </Tooltip>

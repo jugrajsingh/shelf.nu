@@ -1,5 +1,5 @@
-import { useLoaderData } from "@remix-run/react";
 import { Text, Flex, ProgressCircle } from "@tremor/react";
+import { useLoaderData } from "react-router";
 import { ClientOnly } from "remix-utils/client-only";
 import type { loader } from "~/routes/_layout+/dashboard";
 import { EmptyState } from "./empty-state";
@@ -46,6 +46,7 @@ export default function LocationRatioChart() {
                     value={(assetsWithLocation / totalAssets) * 100}
                     size="xl"
                     color="orange"
+                    className="relative"
                   >
                     <span className="block text-center text-xs font-medium text-gray-600">
                       Location known <br />

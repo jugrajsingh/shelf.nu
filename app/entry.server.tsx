@@ -1,25 +1,19 @@
 /* eslint-disable no-console */
 import { PassThrough } from "stream";
 
-import { createReadableStreamFromReadable } from "@remix-run/node";
-import type {
-  ActionFunctionArgs,
-  AppLoadContext,
-  EntryContext,
-  LoaderFunctionArgs,
-} from "@remix-run/node";
-import { RemixServer } from "@remix-run/react";
-import * as Sentry from "@sentry/remix";
+import { createReadableStreamFromReadable } from "@react-router/node";
+import * as Sentry from "@sentry/react-router";
 import { isbot } from "isbot";
 import { renderToPipeableStream } from "react-dom/server";
+import { ServerRouter } from "react-router";
+import type { AppLoadContext, EntryContext } from "react-router";
+import { registerEmailWorkers } from "./emails/email.worker.server";
+import { regierAssetWorkers } from "./modules/asset-reminder/worker.server";
 import { registerBookingWorkers } from "./modules/booking/worker.server";
-import { SENTRY_DSN } from "./utils/env";
 import { ShelfError } from "./utils/error";
 import { Logger } from "./utils/logger";
 import * as schedulerService from "./utils/scheduler.server";
-import { initSentry } from "./utils/sentry.server";
-
-initSentry();
+export * from "../server";
 
 // === start: register scheduler and workers ===
 schedulerService
@@ -30,6 +24,26 @@ schedulerService
         new ShelfError({
           cause,
           message: "Something went wrong while registering booking workers.",
+          label: "Scheduler",
+        })
+      );
+    });
+
+    await regierAssetWorkers().catch((cause) => {
+      Logger.error(
+        new ShelfError({
+          cause,
+          message: "Something went wrong while registering asset workers.",
+          label: "Scheduler",
+        })
+      );
+    });
+
+    await registerEmailWorkers().catch((cause) => {
+      Logger.error(
+        new ShelfError({
+          cause,
+          message: "Something went wrong while registering email workers.",
           label: "Scheduler",
         })
       );
@@ -56,26 +70,20 @@ schedulerService
  * If this happen, you will have Sentry logs with a `Unhandled` tag and `unhandled.remix.server` as origin.
  *
  */
-export function handleError(
-  error: unknown,
-  { request }: LoaderFunctionArgs | ActionFunctionArgs
-) {
-  if (SENTRY_DSN) {
-    void Sentry.captureRemixServerException(
-      error,
-      "unhandled.remix.server",
-      request
-    );
-  }
-}
+export const handleError = Sentry.createSentryHandleError({
+  logErrors: false,
+});
 
 const ABORT_DELAY = 5000;
 
-export default function handleRequest(
+// Stream timeout for v3_singleFetch
+export const streamTimeout = 5000;
+
+function handleRequest(
   request: Request,
   responseStatusCode: number,
   responseHeaders: Headers,
-  remixContext: EntryContext,
+  reactRouterContext: EntryContext,
   // This is ignored so we can keep it in the template for visibility.  Feel
   // free to delete this parameter in your app if you're not using it!
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -86,13 +94,13 @@ export default function handleRequest(
         request,
         responseStatusCode,
         responseHeaders,
-        remixContext
+        reactRouterContext
       )
     : handleBrowserRequest(
         request,
         responseStatusCode,
         responseHeaders,
-        remixContext
+        reactRouterContext
       );
 }
 
@@ -100,16 +108,12 @@ function handleBotRequest(
   request: Request,
   responseStatusCode: number,
   responseHeaders: Headers,
-  remixContext: EntryContext
+  reactRouterContext: EntryContext
 ) {
   return new Promise((resolve, reject) => {
     let shellRendered = false;
     const { pipe, abort } = renderToPipeableStream(
-      <RemixServer
-        context={remixContext}
-        url={request.url}
-        abortDelay={ABORT_DELAY}
-      />,
+      <ServerRouter context={reactRouterContext} url={request.url} />,
       {
         onAllReady() {
           shellRendered = true;
@@ -150,16 +154,12 @@ function handleBrowserRequest(
   request: Request,
   responseStatusCode: number,
   responseHeaders: Headers,
-  remixContext: EntryContext
+  reactRouterContext: EntryContext
 ) {
   return new Promise((resolve, reject) => {
     let shellRendered = false;
     const { pipe, abort } = renderToPipeableStream(
-      <RemixServer
-        context={remixContext}
-        url={request.url}
-        abortDelay={ABORT_DELAY}
-      />,
+      <ServerRouter context={reactRouterContext} url={request.url} />,
       {
         onShellReady() {
           shellRendered = true;
@@ -195,3 +195,6 @@ function handleBrowserRequest(
     setTimeout(abort, ABORT_DELAY);
   });
 }
+
+// Wrap with Sentry so server errors/transactions are reported.
+export default Sentry.wrapSentryHandleRequest(handleRequest);

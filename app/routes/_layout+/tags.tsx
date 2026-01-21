@@ -3,20 +3,24 @@ import type {
   ActionFunctionArgs,
   LoaderFunctionArgs,
   MetaFunction,
-} from "@remix-run/node";
-import { json } from "@remix-run/node";
-import { Link, Outlet } from "@remix-run/react";
+} from "react-router";
+import { data, Link, Outlet } from "react-router";
 import { z } from "zod";
 import { ErrorContent } from "~/components/errors";
 import Header from "~/components/layout/header";
 import type { HeaderData } from "~/components/layout/header/types";
+import LineBreakText from "~/components/layout/line-break-text";
 import { List } from "~/components/list";
 import { ListContentWrapper } from "~/components/list/content-wrapper";
 import { Filters } from "~/components/list/filters";
 import { Button } from "~/components/shared/button";
+import { GrayBadge } from "~/components/shared/gray-badge";
 import { Tag as TagBadge } from "~/components/shared/tag";
 import { Th, Td } from "~/components/table";
-import { DeleteTag } from "~/components/tag/delete-tag";
+import BulkActionsDropdown from "~/components/tag/bulk-actions-dropdown";
+import TagQuickActions from "~/components/tag/tag-quick-actions";
+import TagUseForFilter from "~/components/tag/tag-use-for-filter";
+import { useUserRoleHelper } from "~/hooks/user-user-role-helper";
 
 import { deleteTag, getTags } from "~/modules/tag/service.server";
 import { appendToMetaTitle } from "~/utils/append-to-meta-title";
@@ -29,16 +33,17 @@ import { sendNotification } from "~/utils/emitter/send-notification.server";
 import { makeShelfError } from "~/utils/error";
 import {
   assertIsDelete,
-  data,
+  payload,
   error,
   getCurrentSearchParams,
   parseData,
 } from "~/utils/http.server";
 import { getParamsValues } from "~/utils/list";
+import { formatEnum } from "~/utils/misc";
 import {
   PermissionAction,
   PermissionEntity,
-} from "~/utils/permissions/permission.validator.server";
+} from "~/utils/permissions/permission.data";
 import { requirePermission } from "~/utils/roles.server";
 
 export async function loader({ context, request }: LoaderFunctionArgs) {
@@ -62,6 +67,7 @@ export async function loader({ context, request }: LoaderFunctionArgs) {
       page,
       perPage,
       search,
+      request,
     });
     const totalPages = Math.ceil(totalTags / perPage);
 
@@ -73,8 +79,8 @@ export async function loader({ context, request }: LoaderFunctionArgs) {
       plural: "tags",
     };
 
-    return json(
-      data({
+    return data(
+      payload({
         header,
         items: tags,
         search,
@@ -90,7 +96,7 @@ export async function loader({ context, request }: LoaderFunctionArgs) {
     );
   } catch (cause) {
     const reason = makeShelfError(cause, { userId });
-    throw json(error(reason), { status: reason.status });
+    throw data(error(reason), { status: reason.status });
   }
 }
 
@@ -131,10 +137,10 @@ export async function action({ context, request }: ActionFunctionArgs) {
       senderId: userId,
     });
 
-    return json(data({ success: true }));
+    return payload({ success: true });
   } catch (cause) {
     const reason = makeShelfError(cause, { userId });
-    return json(error(reason), { status: reason.status });
+    return data(error(reason), { status: reason.status });
   }
 }
 
@@ -144,6 +150,8 @@ export const handle = {
 export const ErrorBoundary = () => <ErrorContent />;
 
 export default function CategoriesPage() {
+  const { isBaseOrSelfService } = useUserRoleHelper();
+
   return (
     <>
       <Header>
@@ -151,21 +159,28 @@ export default function CategoriesPage() {
           to="new"
           role="link"
           aria-label={`new tag`}
-          icon="plus"
           data-test-id="createNewTag"
         >
           New tag
         </Button>
       </Header>
       <ListContentWrapper>
-        <Filters />
+        <Filters
+          slots={{
+            "right-of-search": <TagUseForFilter />,
+          }}
+        />
         <Outlet />
         <List
+          bulkActions={
+            isBaseOrSelfService ? undefined : <BulkActionsDropdown />
+          }
           ItemComponent={TagItem}
           headerChildren={
             <>
-              <Th className="hidden md:table-cell">Description</Th>
-              <Th className="hidden md:table-cell">Actions</Th>
+              <Th>Description</Th>
+              <Th>Use for</Th>
+              <Th>Actions</Th>
             </>
           }
         />
@@ -177,28 +192,37 @@ export default function CategoriesPage() {
 const TagItem = ({
   item,
 }: {
-  item: Pick<Tag, "id" | "description" | "name">;
+  item: Pick<Tag, "id" | "description" | "name" | "useFor" | "color">;
 }) => (
   <>
     <Td className="w-1/4 text-left" title={`Tag: ${item.name}`}>
-      <TagBadge>{item.name}</TagBadge>
+      <TagBadge color={item.color ?? undefined} withDot={false}>
+        {item.name}
+      </TagBadge>
     </Td>
-    <Td className="w-3/4 text-gray-500" title="Description">
-      {item.description}
+    <Td className="max-w-62 md:w-3/4">
+      {item.description ? (
+        <LineBreakText
+          className="md:w-3/4"
+          text={item.description}
+          numberOfLines={3}
+          charactersPerLine={60}
+        />
+      ) : null}
+    </Td>
+    <Td>
+      <div className="flex min-w-32 items-center gap-2">
+        {item.useFor && item.useFor.length > 0 ? (
+          item.useFor.map((useFor) => (
+            <GrayBadge key={useFor}>{formatEnum(useFor)}</GrayBadge>
+          ))
+        ) : (
+          <GrayBadge>All</GrayBadge>
+        )}
+      </div>
     </Td>
     <Td className="text-left">
-      <Button
-        to={`${item.id}/edit`}
-        role="link"
-        aria-label={`edit tags`}
-        variant="secondary"
-        size="sm"
-        className=" mx-2 text-[12px]"
-        icon={"write"}
-        title={"Edit"}
-        data-test-id="editTagsButton"
-      />
-      <DeleteTag tag={item} />
+      <TagQuickActions tag={item} />
     </Td>
   </>
 );

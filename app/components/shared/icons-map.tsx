@@ -1,4 +1,15 @@
-import { CalendarIcon } from "@radix-ui/react-icons";
+import type { JSX } from "react";
+import { CalendarIcon, RowsIcon } from "@radix-ui/react-icons";
+import {
+  CalendarCheck,
+  MapPinIcon,
+  MousePointerClick,
+  Package,
+  PackageCheck,
+  PackageMinus,
+  PackagePlus,
+  QrCode,
+} from "lucide-react";
 import { Spinner } from "./spinner";
 
 import {
@@ -18,7 +29,6 @@ import {
   WriteIcon,
   TagsIcon,
   CategoriesIcon,
-  LocationMarkerIcon,
   AssetsIcon,
   DownloadIcon,
   PrintIcon,
@@ -33,14 +43,33 @@ import {
   GraphIcon,
   ScanQRIcon,
   SwitchIcon,
-  KitIcon,
   BookingsIcon,
   CheckOutIcon,
   CheckInIcon,
+  CheckIcon,
+  AssetLabel,
+  NoPermissionsIcon,
+  ActiveSwitchIcon,
+  ScanIcon,
+  MapIcon,
+  ToolIcon,
+  AddTagsIcon,
+  RemoveTagsIcon,
+  InstallIcon,
+  ColumnsIcon,
+  LockIcon,
+  ImageIcon,
+  FilterIcon,
+  SortIcon,
+  AvailableIcon,
+  UnavailableIcon,
+  ChangeIcon,
 } from "../icons/library";
 
 /** The possible options for icons to be rendered in the button */
 export type IconType =
+  | "check"
+  | "map"
   | "plus"
   | "trash"
   | "archive"
@@ -48,6 +77,7 @@ export type IconType =
   | "search"
   | "spinner"
   | "x"
+  | "cancel"
   | "refresh"
   | "coins"
   | "barcode"
@@ -57,6 +87,8 @@ export type IconType =
   | "question"
   | "write"
   | "tag"
+  | "tag-remove"
+  | "tag-add"
   | "category"
   | "location"
   | "gps"
@@ -76,14 +108,39 @@ export type IconType =
   | "switch"
   | "kit"
   | "bookings"
-  | "check-out"
-  | "check-in";
+  | "assign-custody"
+  | "release-custody"
+  | "partial-checkin"
+  | "asset-label"
+  | "lock"
+  | "activate"
+  | "deactivate"
+  | "scan"
+  | "tool"
+  | "rows"
+  | "install"
+  | "columns"
+  | "no-permissions"
+  | "image"
+  | "filter"
+  | "sort"
+  | "available"
+  | "unavailable"
+  | "change"
+  | "booking-exist"
+  | "download-qr"
+  | "qr-code"
+  | "mouse-pointer-click"
+  | "add-to-kit"
+  | "remove-from-kit";
 
 type IconsMap = {
   [key in IconType]: JSX.Element;
 };
 
 export const iconsMap: IconsMap = {
+  check: <CheckIcon />,
+  map: <MapIcon />,
   plus: <PlusIcon />,
   trash: <TrashIcon />,
   archive: <ArchiveIcon />,
@@ -91,6 +148,7 @@ export const iconsMap: IconsMap = {
   search: <SearchIcon />,
   spinner: <Spinner />,
   x: <XIcon />,
+  cancel: <XIcon />,
   refresh: <RefreshIcon />,
   coins: <CoinsIcon />,
   barcode: <BarCodeIcon />,
@@ -100,8 +158,10 @@ export const iconsMap: IconsMap = {
   question: <QuestionsIcon />,
   write: <WriteIcon />,
   tag: <TagsIcon />,
+  "tag-add": <AddTagsIcon />,
+  "tag-remove": <RemoveTagsIcon />,
   category: <CategoriesIcon />,
-  location: <LocationMarkerIcon />,
+  location: <MapPinIcon />,
   gps: <GpsMarkerIcon />,
   duplicate: <DuplicateIcon />,
   asset: <AssetsIcon />,
@@ -118,9 +178,32 @@ export const iconsMap: IconsMap = {
   graph: <GraphIcon />,
   scanQR: <ScanQRIcon />,
   switch: <SwitchIcon />,
-  kit: <KitIcon />,
-  "check-out": <CheckOutIcon />,
-  "check-in": <CheckInIcon />,
+  kit: <Package />,
+  "assign-custody": <CheckOutIcon />,
+  "release-custody": <CheckInIcon />,
+  "partial-checkin": <PackageCheck />,
+  "asset-label": <AssetLabel />,
+  "no-permissions": <NoPermissionsIcon />,
+  activate: <ActiveSwitchIcon />,
+  deactivate: <XIcon />,
+  scan: <ScanIcon />,
+  tool: <ToolIcon />,
+  rows: <RowsIcon />,
+  install: <InstallIcon />,
+  columns: <ColumnsIcon />,
+  lock: <LockIcon />,
+  image: <ImageIcon />,
+  filter: <FilterIcon />,
+  sort: <SortIcon />,
+  available: <AvailableIcon />,
+  unavailable: <UnavailableIcon />,
+  change: <ChangeIcon />,
+  "booking-exist": <CalendarCheck />,
+  "download-qr": <DownloadIcon />,
+  "qr-code": <QrCode />,
+  "mouse-pointer-click": <MousePointerClick />,
+  "add-to-kit": <PackagePlus />,
+  "remove-from-kit": <PackageMinus />,
 };
 
 export default iconsMap;

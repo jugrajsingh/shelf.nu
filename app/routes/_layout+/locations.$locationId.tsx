@@ -1,32 +1,37 @@
-import type { Asset, Category, Tag, Location } from "@prisma/client";
-import { json, redirect } from "@remix-run/node";
+import {
+  data,
+  redirect,
+  Outlet,
+  useLoaderData,
+  useMatches,
+} from "react-router";
 import type {
   ActionFunctionArgs,
   LinksFunction,
-  LoaderFunctionArgs,
   MetaFunction,
-} from "@remix-run/node";
-import { useLoaderData, useNavigate } from "@remix-run/react";
-import mapCss from "maplibre-gl/dist/maplibre-gl.css?url";
+  LoaderFunctionArgs,
+} from "react-router";
+
 import { z } from "zod";
-import { AssetImage } from "~/components/assets/asset-image";
-import { ChevronRight } from "~/components/icons/library";
-import ContextualModal from "~/components/layout/contextual-modal";
+import ImageWithPreview from "~/components/image-with-preview/image-with-preview";
 import Header from "~/components/layout/header";
 import type { HeaderData } from "~/components/layout/header/types";
-import { List } from "~/components/list";
-import { Filters } from "~/components/list/filters";
+import HorizontalTabs from "~/components/layout/horizontal-tabs";
 import { ActionsDropdown } from "~/components/location/actions-dropdown";
+import { LocationTree } from "~/components/location/location-tree";
 import { ShelfMap } from "~/components/location/map";
 import { MapPlaceholder } from "~/components/location/map-placeholder";
-import { Badge } from "~/components/shared/badge";
 import { Button } from "~/components/shared/button";
 import { Card } from "~/components/shared/card";
-import { Image } from "~/components/shared/image";
-import { Tag as TagBadge } from "~/components/shared/tag";
 import TextualDivider from "~/components/shared/textual-divider";
-import { Td, Th } from "~/components/table";
-import { deleteLocation, getLocation } from "~/modules/location/service.server";
+import { db } from "~/database/db.server";
+import {
+  deleteLocation,
+  getLocation,
+  getLocationDescendantsTree,
+  getLocationHierarchy,
+} from "~/modules/location/service.server";
+import type { RouteHandleWithName } from "~/modules/types";
 import assetCss from "~/styles/asset.css?url";
 import { appendToMetaTitle } from "~/utils/append-to-meta-title";
 import {
@@ -38,7 +43,7 @@ import { sendNotification } from "~/utils/emitter/send-notification.server";
 import { makeShelfError } from "~/utils/error";
 import { geolocate } from "~/utils/geolocate.server";
 import {
-  data,
+  payload,
   error,
   getCurrentSearchParams,
   getParams,
@@ -47,75 +52,87 @@ import { getParamsValues } from "~/utils/list";
 import {
   PermissionAction,
   PermissionEntity,
-} from "~/utils/permissions/permission.validator.server";
+} from "~/utils/permissions/permission.data";
 import { requirePermission } from "~/utils/roles.server";
-import { tw } from "~/utils/tw";
 
-export async function loader({ context, request, params }: LoaderFunctionArgs) {
-  const authSession = context.getSession();
-  const { userId } = authSession;
-  const { locationId: id } = getParams(
-    params,
-    z.object({ locationId: z.string() }),
-    {
-      additionalData: { userId },
-    }
-  );
+const paramsSchema = z.object({ locationId: z.string() });
+
+export async function loader({ request, context, params }: LoaderFunctionArgs) {
+  const { userId } = context.getSession();
+  const { locationId } = getParams(params, paramsSchema);
 
   try {
-    const { organizationId } = await requirePermission({
-      userId: authSession.userId,
+    const { organizationId, userOrganizations } = await requirePermission({
+      userId,
       request,
       entity: PermissionEntity.location,
       action: PermissionAction.read,
     });
 
     const searchParams = getCurrentSearchParams(request);
-    const { page, perPageParam, search } = getParamsValues(searchParams);
+    const { page, perPageParam, search, orderBy, orderDirection } =
+      getParamsValues(searchParams);
     const cookie = await updateCookieWithPerPage(request, perPageParam);
     const { perPage } = cookie;
 
-    const { location, totalAssetsWithinLocation } = await getLocation({
-      organizationId,
-      id,
-      page,
-      perPage,
-      search,
-    });
+    const [{ location }, hierarchy, childLocations] = await Promise.all([
+      getLocation({
+        organizationId,
+        id: locationId,
+        page,
+        perPage,
+        search,
+        orderBy,
+        orderDirection,
+        userOrganizations,
+        request,
+      }),
+      getLocationHierarchy({ organizationId, locationId }),
+      getLocationDescendantsTree({ organizationId, locationId }),
+    ]);
 
-    const totalItems = totalAssetsWithinLocation;
-    const totalPages = totalAssetsWithinLocation / perPage;
+    const allBreadcrumbs = hierarchy.map(({ id, name }) => ({ id, name }));
+    const parentBreadcrumbs =
+      allBreadcrumbs.length > 1 ? allBreadcrumbs.slice(0, -1) : [];
 
     const header: HeaderData = {
       title: location.name,
     };
 
-    const modelName = {
-      singular: "asset",
-      plural: "assets",
-    };
+    // Use cached coordinates from database, or geocode and cache if not available
+    let mapData: { lat: number; lon: number } | null = null;
+    if (location.latitude !== null && location.longitude !== null) {
+      mapData = { lat: location.latitude, lon: location.longitude };
+    } else if (location.address) {
+      // Fallback: geocode and cache coordinates for existing locations
+      mapData = await geolocate(location.address);
+      if (mapData) {
+        // Update the database with the geocoded coordinates
+        await db.location.update({
+          where: { id: location.id },
+          data: {
+            latitude: mapData.lat,
+            longitude: mapData.lon,
+          },
+        });
+      }
+    }
 
-    const mapData = await geolocate(location.address);
-
-    return json(
-      data({
+    return data(
+      payload({
         location,
         header,
-        modelName,
-        items: location.assets,
-        page,
-        totalItems,
-        perPage,
-        totalPages,
         mapData,
+        breadcrumbs: parentBreadcrumbs,
+        childLocations,
       }),
       {
         headers: [setCookie(await userPrefs.serialize(cookie))],
       }
     );
   } catch (cause) {
-    const reason = makeShelfError(cause, { userId, id });
-    throw json(error(reason), { status: reason.status });
+    const reason = makeShelfError(cause, { userId, locationId });
+    throw data(error(reason), { status: reason.status });
   }
 }
 
@@ -128,7 +145,6 @@ export const handle = {
 };
 
 export const links: LinksFunction = () => [
-  { rel: "stylesheet", href: mapCss },
   { rel: "stylesheet", href: assetCss },
 ];
 
@@ -144,14 +160,14 @@ export async function action({ context, request, params }: ActionFunctionArgs) {
   );
 
   try {
-    await requirePermission({
+    const { organizationId } = await requirePermission({
       userId: authSession.userId,
       request,
       entity: PermissionEntity.location,
       action: PermissionAction.delete,
     });
 
-    await deleteLocation({ id });
+    await deleteLocation({ id, organizationId });
 
     sendNotification({
       title: "Location deleted",
@@ -163,210 +179,165 @@ export async function action({ context, request, params }: ActionFunctionArgs) {
     return redirect(`/locations`);
   } catch (cause) {
     const reason = makeShelfError(cause, { userId, id });
-    return json(error(reason), { status: reason.status });
+    return data(error(reason), { status: reason.status });
   }
 }
 
+type LocationBreadcrumb = {
+  id: string;
+  name: string;
+};
+
 export default function LocationPage() {
-  const { location, mapData } = useLoaderData<typeof loader>();
-  const navigate = useNavigate();
+  const { location, mapData, breadcrumbs, childLocations } =
+    useLoaderData<typeof loader>();
+
+  const matches = useMatches();
+  const currentRoute: RouteHandleWithName = matches[matches.length - 1];
+
+  const items = [
+    { to: "overview", content: "Overview" },
+    { to: "assets", content: "Assets" },
+    { to: "kits", content: "Kits" },
+  ];
+
+  /**
+   * When we are on the location.scan-assets route, we render an outlet on the whole layout.
+   */
+  if (currentRoute?.handle?.name === "location.scan-assets-kits") {
+    return <Outlet />;
+  }
 
   return (
     <div>
-      <Header>
-        <ActionsDropdown location={location} />
+      <Header
+        preHeading={
+          breadcrumbs?.length ? (
+            <LocationBreadcrumbs breadcrumbs={breadcrumbs} />
+          ) : undefined
+        }
+        slots={{
+          "left-of-title": (
+            <ImageWithPreview
+              className="mr-2"
+              imageUrl={location.imageUrl ?? undefined}
+              thumbnailUrl={location.thumbnailUrl ?? undefined}
+              alt={location.name}
+              withPreview
+            />
+          ),
+        }}
+      >
+        <ActionsDropdown
+          location={{ ...location, childCount: childLocations?.length }}
+        />
       </Header>
-      <ContextualModal />
 
-      <div className="mt-8 block lg:flex">
-        <div className="shrink-0 overflow-hidden lg:w-[250px] 2xl:w-[400px]">
-          <Image
-            imageId={location?.imageId}
-            alt={`${location.name}`}
-            className={tw(
-              "block h-auto w-full rounded border object-cover 2xl:h-auto",
-              location.description ? "rounded-b-none border-b-0" : ""
-            )}
-            updatedAt={location.image?.updatedAt}
-          />
+      <HorizontalTabs items={items} />
+
+      <div className="mt-4 block md:mx-0 lg:flex">
+        {/* Left column */}
+        <div className="flex-1 md:overflow-hidden">
+          <Outlet />
+        </div>
+
+        {/* Right Column - Location info */}
+        <div className="w-full space-y-4 md:w-[360px] lg:ml-4">
+          {childLocations?.length ? (
+            <Card>
+              <div className="text-sm font-semibold text-gray-900">
+                Child locations
+              </div>
+              <div className="mt-3 text-sm text-gray-700">
+                <LocationTree nodes={childLocations} />
+              </div>
+            </Card>
+          ) : null}
+
           {location.description ? (
-            <Card className=" mt-0 md:rounded-t-none">
+            <Card className="md:rounded-t-none">
               <p className=" text-gray-600">{location.description}</p>
             </Card>
           ) : null}
 
           <TextualDivider text="Details" className="my-8 lg:hidden" />
 
-          {location.address ? (
-            <>
-              <div className="mt-4 flex items-center justify-between gap-10 rounded border border-gray-200 px-4 py-5">
-                <span className=" text-xs font-medium text-gray-600">
-                  Address
-                </span>
-                <span className="font-medium">{location.address}</span>
-              </div>
-              {mapData ? (
-                <div className="mb-10 mt-4">
-                  <ShelfMap latitude={mapData.lat} longitude={mapData.lon} />
-                  <div className="border border-gray-200 p-4 text-center text-text-xs text-gray-600">
-                    <p>
-                      <Button
-                        to={`https://www.google.com/maps/search/?api=1&query=${mapData.lat},${mapData.lon}&zoom=15&markers=${mapData.lat},${mapData.lon}`}
-                        variant="link"
-                        target="_blank"
-                        rel="nofollow noopener noreferrer"
-                      >
-                        See in Google Maps
-                      </Button>
-                    </p>
-                  </div>
-                </div>
-              ) : (
-                <div className="mb-10 mt-4">
-                  <MapPlaceholder
-                    description={
-                      "We couldn't geolocate your address. Please try formatting it differently."
-                    }
-                  />
-                </div>
-              )}
-            </>
-          ) : null}
-        </div>
+          <div className="flex items-start justify-between gap-10 rounded border border-gray-200 bg-white px-4 py-5">
+            <span className=" text-xs font-medium text-gray-600">Address</span>
+            <span className="font-medium">{location.address ?? "-"}</span>
+          </div>
 
-        <div className=" w-full lg:ml-8 lg:w-[calc(100%-282px)]">
-          <TextualDivider text="Assets" className="mb-8 lg:hidden" />
-          <div className="mb-3 flex gap-4 lg:hidden">
-            <Button
-              as="button"
-              to="add-assets"
-              variant="primary"
-              icon="plus"
-              width="full"
-            >
-              Manage assets
-            </Button>
-            <div className="w-full">
-              <ActionsDropdown location={location} fullWidth />
-            </div>
-          </div>
-          <div className="flex flex-col md:gap-2">
-            <Filters className="responsive-filters mb-2 lg:mb-0">
-              <div className="flex items-center justify-normal gap-6 xl:justify-end">
-                <div className="hidden lg:block">
+          {mapData ? (
+            <div className="mb-10 mt-4 border">
+              <ShelfMap latitude={mapData.lat} longitude={mapData.lon} />
+              <div className="border border-gray-200 p-4 text-center text-text-xs text-gray-600">
+                <p>
                   <Button
-                    as="button"
-                    to="add-assets"
-                    variant="primary"
-                    icon="plus"
-                    className="whitespace-nowrap"
+                    to={`https://www.google.com/maps/search/?api=1&query=${mapData.lat},${mapData.lon}&zoom=15&markers=${mapData.lat},${mapData.lon}`}
+                    variant="link"
+                    target="_blank"
+                    rel="nofollow noopener noreferrer"
                   >
-                    Manage assets
+                    See in Google Maps
                   </Button>
-                </div>
+                </p>
+                <p className="mt-2 text-xs">
+                  Geocoding by{" "}
+                  <a
+                    href="https://nominatim.openstreetmap.org/"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-primary-600 underline"
+                  >
+                    OpenStreetMap Nominatim
+                  </a>
+                </p>
               </div>
-            </Filters>
-            <List
-              ItemComponent={ListAssetContent}
-              navigate={(itemId) => navigate(`/assets/${itemId}`)}
-              headerChildren={
-                <>
-                  <Th className="hidden md:table-cell">Category</Th>
-                  <Th className="hidden md:table-cell">Tags</Th>
-                </>
-              }
-              customEmptyStateContent={{
-                title: "There are currently no assets at the location",
-                text: "Add assets in this location",
-                newButtonRoute: "add-assets",
-                newButtonContent: "Add asset",
-              }}
-            />
-          </div>
+            </div>
+          ) : (
+            <div className="mb-10 mt-4 border">
+              <MapPlaceholder
+                description={
+                  location.address
+                    ? "We couldn't geolocate your address. Please try formatting it differently."
+                    : "Add an address to see it on the map."
+                }
+              />
+            </div>
+          )}
         </div>
       </div>
     </div>
   );
 }
 
-const ListAssetContent = ({
-  item,
+function LocationBreadcrumbs({
+  breadcrumbs,
 }: {
-  item: Asset & {
-    category?: Category;
-    tags?: Tag[];
-    location?: Location;
-  };
-}) => {
-  const { category, tags } = item;
+  breadcrumbs: LocationBreadcrumb[];
+}) {
+  if (!breadcrumbs.length) {
+    return null;
+  }
+
   return (
-    <>
-      <Td className="w-full p-0 md:p-0">
-        <div className="flex justify-between gap-3 p-4 md:justify-normal md:px-6">
-          <div className="flex items-center gap-3">
-            <div className="flex size-12 items-center justify-center">
-              <AssetImage
-                asset={{
-                  assetId: item.id,
-                  mainImage: item.mainImage,
-                  mainImageExpiration: item.mainImageExpiration,
-                  alt: item.title,
-                }}
-                className="size-full rounded-[4px] border object-cover"
-              />
-            </div>
-            <div className="flex flex-row items-center gap-2 md:flex-col md:items-start md:gap-0">
-              <div className="font-medium">{item.title}</div>
-              <div className="block md:hidden">
-                {category ? (
-                  <Badge color={category.color} withDot={false}>
-                    {category.name}
-                  </Badge>
-                ) : null}
-              </div>
-            </div>
-          </div>
-
-          <button className="block md:hidden">
-            <ChevronRight />
-          </button>
-        </div>
-      </Td>
-      <Td className="hidden md:table-cell">
-        {category ? (
-          <Badge color={category.color} withDot={false}>
-            {category.name}
-          </Badge>
-        ) : null}
-      </Td>
-      <Td className="hidden text-left md:table-cell">
-        <ListItemTagsColumn tags={tags} />
-      </Td>
-    </>
-  );
-};
-
-const ListItemTagsColumn = ({ tags }: { tags: Tag[] | undefined }) => {
-  const visibleTags = tags?.slice(0, 2);
-  const remainingTags = tags?.slice(2);
-
-  return tags && tags?.length > 0 ? (
-    <div className="">
-      {visibleTags?.map((tag) => (
-        <TagBadge key={tag.name} className="mr-2">
-          {tag.name}
-        </TagBadge>
+    <div className="flex flex-wrap items-center gap-1 text-[11px] font-semibold uppercase tracking-wide text-gray-500">
+      {breadcrumbs.map((crumb, index) => (
+        <span key={crumb.id} className="flex items-center gap-1">
+          <Button
+            to={`/locations/${crumb.id}`}
+            variant="link"
+            className="h-auto p-0 text-[11px] text-gray-600 hover:text-primary-600"
+          >
+            {crumb.name}
+          </Button>
+          {index < breadcrumbs.length - 1 && (
+            <span className="text-gray-400" aria-hidden="true">
+              ›
+            </span>
+          )}
+        </span>
       ))}
-      {remainingTags && remainingTags?.length > 0 ? (
-        <TagBadge
-          className="mr-2 w-6 text-center"
-          title={`${remainingTags?.map((t) => t.name).join(", ")}`}
-        >
-          {`+${tags.length - 2}`}
-        </TagBadge>
-      ) : null}
     </div>
-  ) : null;
-};
-
-// export const ErrorBoundary = () => <ErrorBoundryComponent />;
+  );
+}

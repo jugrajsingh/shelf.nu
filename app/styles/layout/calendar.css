@@ -1,5 +1,5 @@
 .fc-toolbar {
-  @apply border border-gray-300 p-2 m-0 !important;
+  @apply border border-gray-600 p-2 m-0 !important;
   border-bottom: none !important;
   border-top-left-radius: 0.5rem !important;
   border-top-right-radius: 0.5rem !important;
@@ -7,6 +7,15 @@
 
 .fc {
   @apply bg-white;
+}
+.fc-event {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.fc-timeGridDay-view .fc-event-container {
+  min-height: 30px;
 }
 
 .fc-event-time {
@@ -21,12 +30,21 @@
   @apply ml-0 rounded-none border border-gray-400 bg-white text-black pt-[0.5em] border-x-0 !important;
 }
 
+.fc-timegrid-event-harness > a {
+  max-height: 100% !important;
+  min-height: 30px;
+}
+
+.fc-day-today-dayView {
+  @apply bg-none border-none !important;
+}
 .fc-prev-button {
   @apply ml-0 rounded-tr-none rounded-br-none border border-gray-400 bg-white text-gray-600 !important;
 }
 
 .fc-event-main {
   color: inherit !important;
+  /* @apply !max-h-[20px]; */
 }
 .fc-event-title {
   font-weight: inherit !important;
@@ -37,8 +55,17 @@
   }
 }
 
-.fc-day-today {
+.month-view .fc-day-today,
+.week-view .fc-day-today {
   @apply bg-primary-50 border-t-[1.5px] border-t-primary-200 border-l-[1.5px] border-l-primary-200 border-r-[1.5px] border-r-primary-200 border-b-[1.5px] border-b-primary-200 text-primary-700 !important;
+}
+
+.day-view .fc-day-today {
+  @apply bg-transparent !important;
+}
+
+.fc-timegrid-event-harness {
+  @apply shadow-tremor-input drop-shadow-md !important;
 }
 .fc-theme-standard .fc-scrollgrid {
   @apply border border-[#EAECF0] border-t-0;
@@ -50,5 +77,94 @@
 }
 
 .fc-daygrid-day-frame {
-  @apply min-h-[200px] !important;
+  @apply min-h-[130px] !important;
+}
+
+/** Make sure that the background doesn't become gray on focus */
+.fc-event-selected::after,
+.fc-event:focus::after {
+  @apply bg-transparent !important;
+}
+
+/* Better looking border on overlapping events */
+.fc-timegrid-event-harness-inset .fc-timegrid-event,
+.fc-timegrid-event.fc-event-mirror,
+.fc-timegrid-more-link {
+  box-shadow: 0 0 0 1px theme("colors.gray.300") !important;
+}
+/* FullCalendar List Week View Mobile Fixes - Mobile Only */
+
+/* Fix the core issue: override whitespace-nowrap in list view */
+.fc-listWeek-view .inner-event-card-wrapper {
+  @apply !whitespace-normal break-words leading-relaxed;
+}
+
+/* Change from inline-flex to flex and allow wrapping */
+.fc-listWeek-view .inner-event-card-wrapper.inline-flex {
+  @apply !flex flex-wrap items-start gap-1;
+}
+
+/* Ensure the outer container also allows normal wrapping */
+.fc-listWeek-view .fc-event-title > div {
+  @apply !whitespace-normal break-words;
+}
+
+/* Make sure the table respects cell widths */
+.fc-list-table {
+  @apply w-full;
+}
+
+/* Make the graphic column shrink to content - proper table approach */
+.fc-list-event-graphic {
+  width: 1% !important;
+  @apply whitespace-nowrap px-1;
+}
+
+/* Handle the time column - let it also shrink to content */
+.fc-list-event-time {
+  width: 1% !important;
+  @apply pr-2 break-words whitespace-nowrap align-top text-sm;
+}
+
+/* Handle the main content column - takes remaining space */
+.fc-list-event-title {
+  width: auto !important;
+  @apply break-words whitespace-normal leading-relaxed align-top pl-2 text-sm;
+}
+
+/* Set the table headers to match - let them shrink too */
+.fc-list-table thead th:nth-child(2) {
+  width: 1% !important;
+  @apply p-0 whitespace-nowrap;
+}
+
+.fc-list-table thead th:first-child {
+  width: 1% !important;
+  @apply whitespace-nowrap;
+}
+
+/* Ensure list events don't have problematic borders */
+.fc-list-event {
+  @apply !border-l-0 !border-r-0;
+}
+
+/* Ensure text breaks properly */
+.fc-listWeek-view .inner-event-card-wrapper span {
+  @apply break-words;
+}
+
+/* Very small screens - just adjust text size */
+@media (max-width: 480px) {
+  .fc-list-event-time {
+    @apply text-xs;
+  }
+
+  .fc-list-event-title {
+    @apply text-xs;
+  }
+
+  /* Even smaller gaps */
+  .fc-listWeek-view .inner-event-card-wrapper {
+    @apply gap-0.5;
+  }
 }

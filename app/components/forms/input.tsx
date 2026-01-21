@@ -1,12 +1,13 @@
-import type { RefObject } from "react";
+import type { RefObject, InputHTMLAttributes } from "react";
 import { forwardRef } from "react";
 
 import { tw } from "~/utils/tw";
+import { InnerLabel } from "./inner-label";
 import type { IconType } from "../shared/icons-map";
 import iconsMap from "../shared/icons-map";
 
 export interface InputProps
-  extends React.InputHTMLAttributes<HTMLInputElement | HTMLTextAreaElement> {
+  extends InputHTMLAttributes<HTMLInputElement | HTMLTextAreaElement> {
   name?: string;
 
   /** Label for the input field */
@@ -21,8 +22,14 @@ export interface InputProps
   /** Weather the label is hidden */
   hideLabel?: boolean;
 
+  /** Weather the label is hidden on md */
+  hideMd?: boolean;
+
   /** name of any icon available in icons map */
   icon?: IconType;
+
+  /** Class name for the icon */
+  iconClassName?: string;
 
   /** Add on to the input. Cannot be used together with icon  */
   addOn?: string;
@@ -46,6 +53,13 @@ export interface InputProps
   hasAttachedButton?: boolean;
 
   required?: boolean;
+
+  /**
+   * Autocomplete attribute for better form UX and accessibility.
+   * Common values: "email", "name", "username", "new-password", "current-password", "tel", etc.
+   * See: https://developer.mozilla.org/en-US/docs/Web/HTML/Attributes/autocomplete
+   */
+  autoComplete?: string;
 }
 
 const Input = forwardRef(function Input(
@@ -57,17 +71,26 @@ const Input = forwardRef(function Input(
     inputType = "input",
     label,
     hideLabel,
+    hideMd,
     hasAttachedButton = false,
     addOn,
     onChange,
     icon,
+    iconClassName,
     required = false,
     ...rest
   }: InputProps,
   ref
 ) {
+  /**
+   * @TODO
+   * Add automatic server side validation for error messages using getValidationErrors so we dont have to server side errors manually but only pass client side useZorm errors
+   *
+   */
+
   const iconClasses = tw(
-    "pointer-events-none absolute flex h-full items-center  border-gray-300  px-[14px]"
+    "pointer-events-none absolute flex h-full items-center border-gray-300 px-[14px]",
+    iconClassName
   );
 
   const addonClasses = tw(
@@ -75,7 +98,7 @@ const Input = forwardRef(function Input(
   );
 
   const inputClasses = tw(
-    "w-full max-w-full border border-gray-300 px-[14px] py-2 text-[16px] text-gray-900 shadow outline-none placeholder:text-gray-500 focus:border-primary-300 focus:ring-[0] disabled:cursor-not-allowed disabled:border-gray-300 disabled:bg-gray-50 disabled:text-gray-500",
+    "w-full max-w-full border border-gray-300 px-[14px] py-2 text-[16px] text-gray-900 shadow outline-none placeholder:text-gray-500 focus:border-primary-300 focus:ring-[0] disabled:cursor-not-allowed disabled:border-gray-300 disabled:bg-gray-50 disabled:text-gray-500 disabled:placeholder:text-gray-300",
     /** Add some border for error */
     error ? "border-error-300 focus:border-error-300 focus:ring-error-100" : "",
 
@@ -100,6 +123,7 @@ const Input = forwardRef(function Input(
   let input = (
     <input
       {...inputProps}
+      aria-label={label}
       ref={ref as RefObject<HTMLInputElement> | undefined}
     />
   );
@@ -111,24 +135,22 @@ const Input = forwardRef(function Input(
         maxLength={rest.maxLength || 250}
         rows={rest.rows || 8}
         ref={ref as RefObject<HTMLTextAreaElement> | undefined}
+        aria-label={label}
       />
     );
   }
 
   return (
-    <label className={tw("relative flex flex-col", className)}>
+    <label
+      className={tw("relative flex flex-col", className)}
+      htmlFor={inputProps.name}
+    >
       {/* Label */}
-      <span
-        className={tw(
-          `mb-[6px] text-text-sm font-medium text-gray-700`,
-          hideLabel && "md:hidden",
-          required && "required-input-label"
-        )}
-      >
+      <InnerLabel hideLg={hideLabel} hideMd={hideMd} required={required}>
         {label}
-      </span>
+      </InnerLabel>
 
-      <div className={`relative flex flex-wrap items-stretch`}>
+      <div className="input-wrapper relative flex flex-wrap items-stretch">
         {/* IconType */}
         {icon && <div className={iconClasses}>{iconsMap[icon]}</div>}
         {/* Addon */}

@@ -1,8 +1,17 @@
 import { InviteStatuses } from "@prisma/client";
-import type { LoaderFunctionArgs } from "@remix-run/node";
-import { json, redirect } from "@remix-run/node";
+import type { LoaderFunctionArgs } from "react-router";
+import {
+  data,
+  redirect,
+  Form,
+  useActionData,
+  useLoaderData,
+} from "react-router";
 import { z } from "zod";
-import { Spinner } from "~/components/shared/spinner";
+import { Button } from "~/components/shared/button";
+import { db } from "~/database/db.server";
+import { useSearchParams } from "~/hooks/search-params";
+import { useDisabled } from "~/hooks/use-disabled";
 import { signInWithEmail } from "~/modules/auth/service.server";
 import { generateRandomCode } from "~/modules/invite/helpers";
 import {
@@ -10,23 +19,85 @@ import {
   updateInviteStatus,
 } from "~/modules/invite/service.server";
 import { setSelectedOrganizationIdCookie } from "~/modules/organization/context.server";
+import { appendToMetaTitle } from "~/utils/append-to-meta-title";
 import { setCookie } from "~/utils/cookies.server";
-import { INVITE_TOKEN_SECRET } from "~/utils/env";
+import { INVITE_TOKEN_SECRET, SUPPORT_EMAIL } from "~/utils/env";
 import { ShelfError, makeShelfError } from "~/utils/error";
-import { error, parseData, safeRedirect } from "~/utils/http.server";
+import {
+  payload,
+  error,
+  getParams,
+  parseData,
+  safeRedirect,
+} from "~/utils/http.server";
 import jwt from "~/utils/jsonwebtoken.server";
 
-export async function loader({ context, request, params }: LoaderFunctionArgs) {
+export async function loader({ context, params }: LoaderFunctionArgs) {
+  const { inviteId } = getParams(params, z.object({ inviteId: z.string() }), {
+    additionalData: { inviteId: params.inviteId },
+  });
   try {
+    /** We get the invite based on the id of the params */
+    const invite = await db.invite
+      .findFirstOrThrow({
+        where: {
+          id: inviteId,
+        },
+        include: {
+          organization: {
+            select: {
+              name: true,
+            },
+          },
+          inviter: {
+            select: {
+              firstName: true,
+              lastName: true,
+            },
+          },
+        },
+      })
+      .catch((cause) => {
+        throw new ShelfError({
+          cause,
+          title: "Invite not found",
+          message:
+            "The invitation you are trying to accept is either not found or expired",
+          label: "Invite",
+        });
+      });
+
     /** Here we have to do a check based on the session of the current user
      * If the user is already signed in, we have to make sure the invite sent, is for the same user
      */
     if (context.isAuthenticated) {
-      await checkUserAndInviteMatch({ context, params });
+      await checkUserAndInviteMatch({
+        context,
+        invite,
+      });
     }
 
+    return payload({
+      inviter: `${invite.inviter.firstName} ${invite.inviter.lastName}`,
+      workspace: `${invite.organization.name}`,
+    });
+  } catch (cause) {
+    const reason = makeShelfError(cause);
+    throw data(
+      error({ ...reason, title: reason.title || "Accept team invite" }),
+      {
+        status: reason.status,
+      }
+    );
+  }
+}
+
+export const meta = () => [{ title: appendToMetaTitle("Accept team invite") }];
+
+export async function action({ context, request }: LoaderFunctionArgs) {
+  try {
     const { token } = parseData(
-      new URL(decodeURIComponent(request.url)).searchParams,
+      await request.formData(),
       z.object({ token: z.string() }),
       {
         message:
@@ -97,14 +168,18 @@ export async function loader({ context, request, params }: LoaderFunctionArgs) {
     );
   } catch (cause) {
     const reason = makeShelfError(cause);
-
+    let titleOverride = null;
     if (cause instanceof Error && cause.name === "JsonWebTokenError") {
+      titleOverride = "Invalid invite token";
       reason.message =
         "The invitation link is invalid. Please try clicking the link in your email again or request a new invite. If the issue persists, feel free to contact support";
     }
 
-    throw json(
-      error({ ...reason, title: reason.title || "Accept team invite" }),
+    return data(
+      error({
+        ...reason,
+        title: titleOverride ?? (reason.title || "Accept team invite"),
+      }),
       {
         status: reason.status,
       }
@@ -113,10 +188,56 @@ export async function loader({ context, request, params }: LoaderFunctionArgs) {
 }
 
 export default function AcceptInvite() {
+  const { inviter, workspace } = useLoaderData<typeof loader>();
+  const [searchParams] = useSearchParams();
+  const disabled = useDisabled();
+  const actionData = useActionData<typeof action>();
+  const error = actionData?.error;
   return (
-    <div className=" flex max-w-[400px] flex-col items-center text-center">
-      <Spinner />
-      <p className="mt-2">Validating token...</p>
-    </div>
+    <>
+      <div className=" flex flex-col items-center text-center">
+        {error ? (
+          <div>
+            <h2>{error.title}</h2>
+            <p
+              className="mx-4 mb-3 mt-2 md:mx-[-200px]"
+              dangerouslySetInnerHTML={{ __html: error.message }}
+            />
+            <Button to="/" variant={"secondary"}>
+              Back to home
+            </Button>
+          </div>
+        ) : (
+          <div>
+            <h2>Accept invite</h2>
+            <p className="mt-2">
+              <strong>{inviter}</strong> invites you to join Shelf as a member
+              of <strong>{workspace}’s</strong> workspace.
+            </p>
+            <Form method="post" className="my-3">
+              <input
+                type="hidden"
+                name="token"
+                value={searchParams.get("token") || ""}
+              />
+
+              <Button type="submit" disabled={disabled || error}>
+                {disabled ? "Validating token..." : "Accept invite"}
+              </Button>
+            </Form>
+          </div>
+        )}
+      </div>
+      <div className=" mx-4 mt-20 flex flex-col items-center text-center text-gray-600 md:mx-[-200px]">
+        <p>
+          If you have any questions or need assistance, please don't hesitate to
+          contact our support team at{" "}
+          <Button variant={"link-gray"} to={`mailto:${SUPPORT_EMAIL}`}>
+            {SUPPORT_EMAIL}
+          </Button>
+          .
+        </p>
+      </div>
+    </>
   );
 }

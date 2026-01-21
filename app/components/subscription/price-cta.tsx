@@ -1,30 +1,17 @@
-import { Form, useLoaderData } from "@remix-run/react";
-import type { loader } from "~/routes/_layout+/settings.subscription";
-import { CustomerPortalForm } from "./customer-portal-form";
-import type { Price } from "./prices";
+import { useLoaderData } from "react-router";
+import { config } from "~/config/shelf.config";
+import type { loader } from "~/routes/_layout+/account-details.subscription";
+import type { PriceType } from "./prices";
+import { Form } from "../custom-form";
 import { Button } from "../shared/button";
 
-export const PriceCta = ({
-  price,
-  subscription,
-}: {
-  price: Price;
-  subscription: Object | null;
-}) => {
+export const PriceCta = ({ price }: { price: PriceType }) => {
   const { usedFreeTrial } = useLoaderData<typeof loader>();
 
   if (price.id === "free") return null;
 
   const isTeamSubscriptionColumn =
     price.product.metadata.shelf_tier === "tier_2";
-
-  if (subscription) {
-    return (
-      <CustomerPortalForm
-        buttonText={subscription ? "Manage subscription" : undefined}
-      />
-    );
-  }
 
   return (
     <>
@@ -39,7 +26,7 @@ export const PriceCta = ({
           Upgrade to {price.product.name}
         </Button>
 
-        {isTeamSubscriptionColumn && !subscription && !usedFreeTrial && (
+        {isTeamSubscriptionColumn && !usedFreeTrial && (
           <Button
             variant="secondary"
             className="mt-2"
@@ -47,7 +34,7 @@ export const PriceCta = ({
             name="intent"
             value="trial"
           >
-            Start 14 day free trial
+            Start {config.freeTrialDays} day free trial
           </Button>
         )}
       </Form>

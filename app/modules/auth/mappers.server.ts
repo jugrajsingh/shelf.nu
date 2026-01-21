@@ -1,4 +1,4 @@
-import type { AuthSession } from "server/session";
+import type { AuthSession } from "@server/session";
 import type { SupabaseAuthSession } from "~/integrations/supabase/types";
 
 import type { ErrorLabel } from "~/utils/error";
@@ -19,7 +19,6 @@ export function mapAuthSession(
       label,
     });
   }
-
   return {
     accessToken: supabaseAuthSession.access_token,
     refreshToken: supabaseAuthSession.refresh_token,

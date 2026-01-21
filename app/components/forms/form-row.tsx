@@ -1,11 +1,11 @@
-import React from "react";
+import type { JSX, ReactNode } from "react";
 import { tw } from "~/utils/tw";
 import SubHeading from "../shared/sub-heading";
 
 interface Props {
   /** Label to be rendered on the left side of the row */
   rowLabel: string;
-  children: React.ReactNode;
+  children: ReactNode;
   className?: string;
   subHeading?: string | JSX.Element;
   required?: boolean;
@@ -34,7 +34,9 @@ export default function FormRow({
         <SubHeading className="text-xs text-gray-600">{subHeading}</SubHeading>
       </div>
 
-      <div className="flex w-[512px] flex-wrap">{children}</div>
+      <div className="form-row-children-wrapper relative flex w-[512px] max-w-full flex-wrap">
+        {children}
+      </div>
     </div>
   );
 }

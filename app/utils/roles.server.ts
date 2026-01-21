@@ -1,17 +1,19 @@
-import { Roles } from "@prisma/client";
+import type { SsoDetails } from "@prisma/client";
+import { OrganizationRoles, Roles } from "@prisma/client";
 import { db } from "~/database/db.server";
-import { getSelectedOrganisation } from "~/modules/organization/context.server";
+import { getSelectedOrganization } from "~/modules/organization/context.server";
 import { ShelfError } from "./error";
 import type {
   PermissionAction,
   PermissionEntity,
-} from "./permissions/permission.validator.server";
+} from "./permissions/permission.data";
 import { validatePermission } from "./permissions/permission.validator.server";
 
 export async function requireUserWithPermission(name: Roles, userId: string) {
   try {
     return await db.user.findFirstOrThrow({
       where: { id: userId, roles: { some: { name } } },
+      select: { id: true },
     });
   } catch (cause) {
     throw new ShelfError({
@@ -36,6 +38,7 @@ export async function isAdmin(context: Record<string, any>) {
       id: authSession.userId,
       roles: { some: { name: Roles["ADMIN"] } },
     },
+    select: { id: true },
   });
 
   return !!user;
@@ -65,7 +68,7 @@ export async function requirePermission({
     userOrganizations,
     organizations,
     currentOrganization,
-  } = await getSelectedOrganisation({ userId, request });
+  } = await getSelectedOrganization({ userId, request });
 
   const roles = userOrganizations.find(
     (o) => o.organization.id === organizationId
@@ -79,10 +82,71 @@ export async function requirePermission({
     userId,
   });
 
+  const role = roles ? roles[0] : OrganizationRoles.BASE;
+
+  const isSelfServiceOrBase =
+    role === OrganizationRoles.SELF_SERVICE || role === OrganizationRoles.BASE;
+
+  /**
+   * This checks the organization settings permissions overrides for BASE and SELF_SERVICE roles
+   * If the user is in a BASE or SELF_SERVICE role, we check if they can see all bookings
+   */
+  const canSeeAllBookings =
+    // Admin/Owner always can see all
+    !isSelfServiceOrBase ||
+    // SELF_SERVICE can see all if org setting allows
+    (role === OrganizationRoles.SELF_SERVICE &&
+      currentOrganization.selfServiceCanSeeBookings) ||
+    // BASE can see all if org setting allows
+    (role === OrganizationRoles.BASE &&
+      currentOrganization.baseUserCanSeeBookings);
+
+  // Determine if user can see all custody information
+  const canSeeAllCustody =
+    // Admin/Owner always can see all
+    !isSelfServiceOrBase ||
+    // SELF_SERVICE can see all if org setting allows
+    (role === OrganizationRoles.SELF_SERVICE &&
+      currentOrganization.selfServiceCanSeeCustody) ||
+    // BASE can see all if org setting allows
+    (role === OrganizationRoles.BASE &&
+      currentOrganization.baseUserCanSeeCustody);
+
+  // Determine if user can use barcodes based on organization settings
+  const canUseBarcodes = currentOrganization.barcodesEnabled ?? false;
+
   return {
     organizations,
     organizationId,
     currentOrganization,
-    role: roles ? roles[0] : undefined,
+    role,
+    isSelfServiceOrBase,
+    userOrganizations,
+    canSeeAllBookings,
+    canSeeAllCustody,
+    canUseBarcodes,
   };
+}
+
+/** Gets the role needed for SSO login from the groupID returned by the SSO claims */
+export function getRoleFromGroupId(
+  ssoDetails: SsoDetails,
+  groupIds: string[]
+): OrganizationRoles | null {
+  // We prioritize the admin group. If for some reason the user is in both groups, they will be an admin
+  if (ssoDetails.adminGroupId && groupIds.includes(ssoDetails.adminGroupId)) {
+    return OrganizationRoles.ADMIN;
+  } else if (
+    ssoDetails.selfServiceGroupId &&
+    groupIds.includes(ssoDetails.selfServiceGroupId)
+  ) {
+    return OrganizationRoles.SELF_SERVICE;
+  } else if (
+    ssoDetails.baseUserGroupId &&
+    groupIds.includes(ssoDetails.baseUserGroupId)
+  ) {
+    return OrganizationRoles.BASE;
+  } else {
+    return null;
+  }
 }

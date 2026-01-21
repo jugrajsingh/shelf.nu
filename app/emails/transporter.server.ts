@@ -1,6 +1,12 @@
 import nodemailer from "nodemailer";
 
-import { NODE_ENV, SMTP_HOST, SMTP_PWD, SMTP_USER } from "../utils/env";
+import {
+  NODE_ENV,
+  SMTP_HOST,
+  SMTP_PORT,
+  SMTP_PWD,
+  SMTP_USER,
+} from "../utils/env";
 
 let transporter: nodemailer.Transporter;
 
@@ -9,14 +15,23 @@ declare global {
   var __transporter__: nodemailer.Transporter;
 }
 
+/**
+ * Authentication is required when both SMTP_USER and SMTP_PWD are provided
+ */
+const requiresAuth = SMTP_USER !== "" && SMTP_PWD !== "";
+
+/** We store the port so we can then dynamically set the value of the secure field */
+const port = parseInt(SMTP_PORT) || 465;
 const transporterSettings = {
   host: SMTP_HOST,
-  port: 465,
-  secure: true, // true for 465, false for other ports
-  auth: {
-    user: SMTP_USER,
-    pass: SMTP_PWD,
-  },
+  port,
+  secure: port === 465, // true for 465, false for other ports
+  ...(requiresAuth && {
+    auth: {
+      user: SMTP_USER,
+      pass: SMTP_PWD,
+    },
+  }),
   tls: {
     // do not fail on invalid certs
     rejectUnauthorized: true,

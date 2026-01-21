@@ -3,20 +3,22 @@ import type {
   ActionFunctionArgs,
   LoaderFunctionArgs,
   MetaFunction,
-} from "@remix-run/node";
-import { json } from "@remix-run/node";
-import { Link, Outlet } from "@remix-run/react";
+} from "react-router";
+import { data, Link, Outlet } from "react-router";
 import { z } from "zod";
-import { DeleteCategory } from "~/components/category/delete-category";
+import BulkActionsDropdown from "~/components/category/bulk-actions-dropdown";
+import CategoryQuickActions from "~/components/category/category-quick-actions";
 import { ErrorContent } from "~/components/errors";
 import Header from "~/components/layout/header";
 import type { HeaderData } from "~/components/layout/header/types";
+import LineBreakText from "~/components/layout/line-break-text";
 import { List } from "~/components/list";
 import { ListContentWrapper } from "~/components/list/content-wrapper";
 import { Filters } from "~/components/list/filters";
 import { Badge } from "~/components/shared/badge";
 import { Button } from "~/components/shared/button";
 import { Th, Td } from "~/components/table";
+import { useUserRoleHelper } from "~/hooks/user-user-role-helper";
 import {
   deleteCategory,
   getCategories,
@@ -30,7 +32,7 @@ import {
 import { sendNotification } from "~/utils/emitter/send-notification.server";
 import { makeShelfError } from "~/utils/error";
 import {
-  data,
+  payload,
   error,
   getCurrentSearchParams,
   parseData,
@@ -39,7 +41,7 @@ import { getParamsValues } from "~/utils/list";
 import {
   PermissionAction,
   PermissionEntity,
-} from "~/utils/permissions/permission.validator.server";
+} from "~/utils/permissions/permission.data";
 import { requirePermission } from "~/utils/roles.server";
 
 export async function loader({ context, request }: LoaderFunctionArgs) {
@@ -75,8 +77,8 @@ export async function loader({ context, request }: LoaderFunctionArgs) {
       plural: "categories",
     };
 
-    return json(
-      data({
+    return data(
+      payload({
         header,
         items: categories,
         search,
@@ -92,7 +94,7 @@ export async function loader({ context, request }: LoaderFunctionArgs) {
     );
   } catch (cause) {
     const reason = makeShelfError(cause, { userId });
-    throw json(error(reason), { status: reason.status });
+    throw data(error(reason), { status: reason.status });
   }
 }
 
@@ -131,10 +133,10 @@ export async function action({ context, request }: ActionFunctionArgs) {
       senderId: userId,
     });
 
-    return json(data({ success: true }));
+    return payload({ success: true });
   } catch (cause) {
     const reason = makeShelfError(cause, { userId });
-    return json(error(reason), { status: reason.status });
+    return data(error(reason), { status: reason.status });
   }
 }
 
@@ -144,6 +146,8 @@ export const handle = {
 export const ErrorBoundary = () => <ErrorContent />;
 
 export default function CategoriesPage() {
+  const { isBaseOrSelfService } = useUserRoleHelper();
+
   return (
     <>
       <Header>
@@ -151,7 +155,6 @@ export default function CategoriesPage() {
           to="new"
           role="link"
           aria-label={`new category`}
-          icon="plus"
           data-test-id="createNewCategory"
         >
           New category
@@ -161,12 +164,15 @@ export default function CategoriesPage() {
         <Filters />
         <Outlet />
         <List
+          bulkActions={
+            isBaseOrSelfService ? undefined : <BulkActionsDropdown />
+          }
           ItemComponent={CategoryItem}
           headerChildren={
             <>
-              <Th className="hidden md:table-cell">Description</Th>
-              <Th className="hidden md:table-cell">Assets</Th>
-              <Th className="hidden md:table-cell">Actions</Th>
+              <Th>Description</Th>
+              <Th>Assets</Th>
+              <Th>Actions</Th>
             </>
           }
         />
@@ -185,28 +191,24 @@ const CategoryItem = ({
   };
 }) => (
   <>
-    <Td title={`Category: ${item.name}`} className="w-1/4 ">
+    <Td title={`Category: ${item.name}`} className="w-1/4">
       <Badge color={item.color} withDot={false}>
         {item.name}
       </Badge>
     </Td>
-    <Td className="w-3/4 text-gray-500" title="Description">
-      {item.description}
+    <Td className="max-w-62 md:w-3/4">
+      {item.description ? (
+        <LineBreakText
+          className="md:w-3/4"
+          text={item.description}
+          numberOfLines={3}
+          charactersPerLine={60}
+        />
+      ) : null}
     </Td>
     <Td>{item._count.assets}</Td>
     <Td>
-      <Button
-        to={`${item.id}/edit`}
-        role="link"
-        aria-label={`edit category`}
-        variant="secondary"
-        size="sm"
-        className=" mx-2 text-[12px]"
-        icon={"write"}
-        title={"Edit"}
-        data-test-id="editCategoryButton"
-      />
-      <DeleteCategory category={item} />
+      <CategoryQuickActions category={item} />
     </Td>
   </>
 );

@@ -1,5 +1,6 @@
 import { useMemo } from "react";
-import { useSearchParams } from "@remix-run/react";
+import { useSearchParams } from "~/hooks/search-params";
+
 import {
   Select,
   SelectContent,
@@ -8,7 +9,7 @@ import {
   SelectValue,
 } from "../forms/select";
 
-export function AvailabilitySelect() {
+export function AvailabilitySelect({ label = "assets" }: { label?: string }) {
   const [searchParams, setSearchParams] = useSearchParams();
   const hideUnavailable = searchParams.get("hideUnavailable");
 
@@ -35,7 +36,10 @@ export function AvailabilitySelect() {
       defaultValue={defaultValue}
       onValueChange={handleSelectChange}
     >
-      <SelectTrigger className="text-left text-base text-gray-500 md:mt-0 md:max-w-fit">
+      <SelectTrigger
+        className="text-left text-base text-gray-500 md:mt-0 md:max-w-fit"
+        aria-label="Select availability"
+      >
         <SelectValue placeholder="Select availability" />
       </SelectTrigger>
 
@@ -52,7 +56,7 @@ export function AvailabilitySelect() {
             className="rounded-none border-b border-gray-200 px-6 py-4 pr-[5px]"
           >
             <span className="mr-4 block lowercase text-gray-700 first-letter:uppercase">
-              All assets
+              All {label}
             </span>
           </SelectItem>
           <SelectItem

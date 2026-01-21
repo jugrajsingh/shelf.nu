@@ -5,9 +5,14 @@ import type {
   TeamMember,
   User,
 } from "@prisma/client";
+import { TagUseFor } from "@prisma/client";
+import loadash from "lodash";
 import { db } from "~/database/db.server";
 import type { ErrorLabel } from "~/utils/error";
 import { ShelfError, maybeUniqueConstraintViolation } from "~/utils/error";
+import { getRandomColor } from "~/utils/get-random-color";
+import { getCurrentSearchParams } from "~/utils/http.server";
+import { ALL_SELECTED_KEY } from "~/utils/list";
 import type { CreateAssetFromContentImportPayload } from "../asset/types";
 
 const label: ErrorLabel = "Tag";
@@ -19,15 +24,19 @@ export async function getTags(params: {
   /** Items to be loaded per page */
   perPage?: number;
   search?: string | null;
+  request: Request;
 }) {
-  const { organizationId, page = 1, perPage = 8, search } = params;
+  const { organizationId, page = 1, perPage = 8, search, request } = params;
 
   try {
+    const searchParams = getCurrentSearchParams(request);
+    const useFor = searchParams.get("useFor");
+
     const skip = page > 1 ? (page - 1) * perPage : 0;
     const take = perPage >= 1 ? perPage : 8; // min 1 and max 25 per page
 
     /** Default value of where. Takes the items belonging to current user */
-    let where: Prisma.TagWhereInput = { organizationId };
+    const where: Prisma.TagWhereInput = { organizationId };
 
     /** If the search string exists, add it to the where object */
     if (search) {
@@ -35,6 +44,10 @@ export async function getTags(params: {
         contains: search,
         mode: "insensitive",
       };
+    }
+
+    if (useFor) {
+      where.useFor = { has: useFor as TagUseFor };
     }
 
     const [tags, totalTags] = await Promise.all([
@@ -64,16 +77,21 @@ export async function getTags(params: {
 export async function createTag({
   name,
   description,
+  color,
   userId,
   organizationId,
-}: Pick<Tag, "description" | "name" | "organizationId"> & {
+  useFor,
+}: Pick<Tag, "description" | "name" | "organizationId" | "color"> & {
   userId: User["id"];
+  useFor: TagUseFor[];
 }) {
   try {
     return await db.tag.create({
       data: {
-        name,
+        name: loadash.trim(name),
         description,
+        useFor,
+        color,
         user: {
           connect: {
             id: userId,
@@ -133,11 +151,15 @@ export async function createTagsIfNotExists({
 }): Promise<Record<string, TeamMember["id"]>> {
   try {
     const tags = data
-      .filter(({ tags }) => tags.length > 0)
+      .filter(({ tags }) => tags && tags.length > 0)
       .reduce((acc: Record<string, string>, curr) => {
-        curr.tags.forEach((tag) => tag !== "" && (acc[tag.trim()] = ""));
+        curr.tags!.forEach((tag) => tag !== "" && (acc[tag.trim()] = ""));
         return acc;
       }, {});
+    // Handle the case where there are no tags
+    if (!Object.keys(tags).length) {
+      return {};
+    }
 
     // now we loop through the categories and check if they exist
     for (const tag of Object.keys(tags)) {
@@ -153,6 +175,7 @@ export async function createTagsIfNotExists({
         const newTag = await db.tag.create({
           data: {
             name: tag as string,
+            color: getRandomColor(),
             user: {
               connect: {
                 id: userId,
@@ -177,12 +200,15 @@ export async function createTagsIfNotExists({
     throw new ShelfError({
       cause,
       message:
-        "Something went wrong while creating the tags. Please try again or contact support.",
+        "Something went wrong while creating the tags. Seems like some of the tag data in your import file is invalid. Please check and try again.",
       additionalData: { userId, organizationId },
       label,
+      /** No need to capture those. They are mostly related to malformed CSV data */
+      shouldBeCaptured: false,
     });
   }
 }
+
 export async function getTag({
   id,
   organizationId,
@@ -211,7 +237,11 @@ export async function updateTag({
   organizationId,
   name,
   description,
-}: Pick<Tag, "id" | "organizationId" | "name" | "description">) {
+  color,
+  useFor,
+}: Pick<Tag, "id" | "organizationId" | "name" | "description" | "color"> & {
+  useFor?: TagUseFor[];
+}) {
   try {
     return await db.tag.update({
       where: {
@@ -219,8 +249,12 @@ export async function updateTag({
         organizationId,
       },
       data: {
-        name,
+        name: loadash.trim(name),
         description,
+        color,
+        useFor: {
+          set: useFor,
+        },
       },
     });
   } catch (cause) {
@@ -229,6 +263,59 @@ export async function updateTag({
         id,
         organizationId,
       },
+    });
+  }
+}
+
+export async function bulkDeleteTags({
+  tagIds,
+  organizationId,
+}: {
+  tagIds: Tag["id"][];
+  organizationId: Organization["id"];
+}) {
+  try {
+    return await db.tag.deleteMany({
+      where: tagIds.includes(ALL_SELECTED_KEY)
+        ? { organizationId }
+        : { id: { in: tagIds }, organizationId },
+    });
+  } catch (cause) {
+    throw new ShelfError({
+      cause,
+      message: "Something went wrong while bulk deleting tags.",
+      additionalData: { tagIds, organizationId },
+      label,
+    });
+  }
+}
+
+/**
+ * This function fetches tags that can be used for booking tags filter, which is used in the booking create forms as well as in the bookings filters
+ */
+export async function getTagsForBookingTagsFilter({
+  organizationId,
+}: {
+  organizationId: Organization["id"];
+}) {
+  try {
+    const tags = await db.tag.findMany({
+      where: {
+        organizationId,
+        OR: [
+          { useFor: { isEmpty: true } },
+          { useFor: { has: TagUseFor.BOOKING } },
+        ],
+      },
+    });
+
+    return { tags, totalTags: tags.length };
+  } catch (cause) {
+    throw new ShelfError({
+      cause,
+      message: "Something went wrong while fetching tags for booking filter",
+      additionalData: { organizationId },
+      label,
     });
   }
 }

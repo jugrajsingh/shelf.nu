@@ -1,6 +1,6 @@
-import type Stripe from "stripe";
+import type { JSX } from "react";
 import { tw } from "~/utils/tw";
-import type { Price } from "./prices";
+import type { PriceType } from "./prices";
 import {
   DoubleLayerIcon,
   HelpIcon,
@@ -15,19 +15,7 @@ import {
   TooltipTrigger,
 } from "../shared/tooltip";
 
-export const PriceBox = ({
-  activePlan,
-  subscription,
-  price,
-  isTrialSubscription,
-  customPlanName,
-}: {
-  activePlan: Stripe.Plan | undefined;
-  subscription: Stripe.Subscription | null;
-  price: Price;
-  isTrialSubscription: boolean;
-  customPlanName?: string | React.ReactNode;
-}) => {
+export const PriceBox = ({ price }: { price: PriceType }) => {
   const amount =
     price.unit_amount != null
       ? price?.recurring?.interval === "year"
@@ -39,12 +27,7 @@ export const PriceBox = ({
 
   return (
     <div
-      className={tw(
-        "price-box mb-8 rounded-2xl border p-8",
-        activePlan?.id === price.id || (!subscription && price.id === "free")
-          ? "border-primary-500 bg-primary-50"
-          : "bg-white"
-      )}
+      className={tw("price-box mb-8 rounded-2xl border bg-white p-8")}
       key={price.id}
     >
       <div className="text-center">
@@ -55,14 +38,8 @@ export const PriceBox = ({
         </div>
         <div className="mb-3 flex items-center justify-center gap-2">
           <h2 className=" text-xl font-semibold text-primary-700">
-            {customPlanName || price.product.name}
+            {price.product.name}
           </h2>
-          {activePlan?.id === price.id ||
-          (!subscription && price.id === "free") ? (
-            <div className="rounded-2xl bg-primary-50 px-2 py-0.5 text-[12px] font-medium text-primary-700 mix-blend-multiply">
-              Current {isTrialSubscription ? "(Free Trial)" : ""}
-            </div>
-          ) : null}
         </div>
         {amount != null ? (
           <div className="mb-3 ">

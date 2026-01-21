@@ -1,35 +1,57 @@
-import { vitePlugin as remix } from "@remix-run/dev";
+import { reactRouter } from "@react-router/dev/vite";
 import { defineConfig } from "vite";
 import tsconfigPaths from "vite-tsconfig-paths";
-import devServer, { defaultOptions } from "@hono/vite-dev-server";
-import esbuild from "esbuild";
-import { flatRoutes } from "remix-flat-routes";
+import { reactRouterHonoServer } from "react-router-hono-server/dev";
 import { cjsInterop } from "vite-plugin-cjs-interop";
+import { init } from "@paralleldrive/cuid2";
+
+const createHash = init({
+  length: 8,
+});
+
+const buildHash = process.env.BUILD_HASH || createHash();
 
 export default defineConfig({
   server: {
     port: 3000,
-    // https: {
-    //   key: "./server/dev/key.pem",
-    //   cert: "./server/dev/cert.pem",
-    // },
-    // https://github.com/remix-run/remix/discussions/8917#discussioncomment-8640023
+    https: {
+      key: "./.cert/key.pem",
+      cert: "./.cert/cert.pem",
+    },
     warmup: {
       clientFiles: [
         "./app/entry.client.tsx",
         "./app/root.tsx",
-        "./app/routes/**/*",
+        "./app/routes/**/*.tsx",
+        "./app/routes/**/*.ts",
+        "!./app/routes/**/*.test.server.ts",
       ],
     },
   },
-  // https://github.com/remix-run/remix/discussions/8917#discussioncomment-8640023
   optimizeDeps: {
-    include: ["./app/routes/**/*"],
+    include: ["./app/routes/**/*.tsx", "./app/routes/**/*.ts"],
+  },
+  build: {
+    target: "ES2022",
+    assetsDir: `file-assets`,
+    rollupOptions: {
+      output: {
+        entryFileNames: `file-assets/${buildHash}/[name]-[hash].js`,
+        chunkFileNames() {
+          return `file-assets/${buildHash}/[name]-[hash].js`;
+        },
+        assetFileNames() {
+          return `file-assets/${buildHash}/[name][extname]`;
+        },
+      },
+    },
   },
   resolve: {
     alias: {
       ".prisma/client/index-browser":
         "./node_modules/.prisma/client/index-browser.js",
+      // Use lottie_light version to avoid eval warnings
+      "lottie-web": "lottie-web/build/player/lottie_light.js",
     },
   },
   plugins: [
@@ -41,41 +63,10 @@ export default defineConfig({
         "react-to-print",
       ],
     }),
-    devServer({
-      injectClientScript: false,
-      entry: "server/index.ts", // The file path of your server.
-      exclude: [/^\/(app)\/.+/, /^\/@.+$/, /^\/node_modules\/.*/],
+    reactRouterHonoServer({
+      serverEntryPoint: "./server/index.ts",
     }),
-    remix({
-      serverBuildFile: "remix.js",
-      ignoredRouteFiles: ["**/.*"],
-      routes: async (defineRoutes) => {
-        return flatRoutes("routes", defineRoutes);
-      },
-      buildEnd: async () => {
-        await esbuild
-          .build({
-            alias: { "~": "./app" },
-            // The final file name
-            outfile: "build/server/index.js",
-            // Our server entry point
-            entryPoints: ["server/index.ts"],
-            // Dependencies that should not be bundled
-            // We import the remix build from "../build/server/remix.js", so no need to bundle it again
-            external: ["./build/server/*"],
-            platform: "node",
-            format: "esm",
-            // Don't include node_modules in the bundle
-            packages: "external",
-            bundle: true,
-            logLevel: "info",
-          })
-          .catch((error: unknown) => {
-            console.error(error);
-            process.exit(1);
-          });
-      },
-    }),
+    reactRouter(),
     tsconfigPaths(),
   ],
 });

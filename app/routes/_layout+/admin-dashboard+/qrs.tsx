@@ -1,12 +1,16 @@
 import type { PrintBatch, Prisma } from "@prisma/client";
-import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
-import { json, redirect } from "@remix-run/node";
+import type {
+  ActionFunctionArgs,
+  LoaderFunctionArgs,
+  MetaFunction,
+} from "react-router";
 import {
+  data,
+  redirect,
   Link,
   useLoaderData,
   useNavigation,
-  useSearchParams,
-} from "@remix-run/react";
+} from "react-router";
 import { z } from "zod";
 import { GenerateBatchQr } from "~/components/admin/generate-batch-qr";
 import { MarkBatchAsPrinted } from "~/components/admin/mark-batch-as-printed";
@@ -23,13 +27,15 @@ import { List } from "~/components/list";
 import { Filters } from "~/components/list/filters";
 import { Td, Th } from "~/components/table";
 import { db } from "~/database/db.server";
+import { useSearchParams } from "~/hooks/search-params";
 import {
   getPaginatedAndFilterableQrCodes,
   markBatchAsPrinted,
 } from "~/modules/qr/service.server";
+import { appendToMetaTitle } from "~/utils/append-to-meta-title";
 import { makeShelfError } from "~/utils/error";
 import { isFormProcessing } from "~/utils/form";
-import { data, error, parseData } from "~/utils/http.server";
+import { payload, error, parseData } from "~/utils/http.server";
 import { requireAdmin } from "~/utils/roles.server";
 
 export async function loader({ context, request }: LoaderFunctionArgs) {
@@ -47,8 +53,8 @@ export async function loader({ context, request }: LoaderFunctionArgs) {
     /** We do this to get all the batches ever created so we can have the filter */
     const batches = await db.printBatch.findMany();
 
-    if (page > totalPages) {
-      return redirect("/admin-dashboard");
+    if (totalPages > 0 && page > totalPages) {
+      return redirect("/admin-dashboard/qrs?page=1");
     }
 
     const header: HeaderData = {
@@ -60,24 +66,26 @@ export async function loader({ context, request }: LoaderFunctionArgs) {
       plural: "qrs",
     };
 
-    return json(
-      data({
-        header,
-        items: qrCodes,
-        search,
-        page,
-        totalItems: totalQrCodes,
-        perPage,
-        totalPages,
-        modelName,
-        batches,
-      })
-    );
+    return payload({
+      header,
+      items: qrCodes,
+      search,
+      page,
+      totalItems: totalQrCodes,
+      perPage,
+      totalPages,
+      modelName,
+      batches,
+    });
   } catch (cause) {
     const reason = makeShelfError(cause, { userId });
-    throw json(error(reason), { status: reason.status });
+    throw data(error(reason), { status: reason.status });
   }
 }
+
+export const meta: MetaFunction<typeof loader> = ({ loaderData }) => [
+  { title: appendToMetaTitle(loaderData?.header.title) },
+];
 
 export async function action({ context, request }: ActionFunctionArgs) {
   const authSession = context.getSession();
@@ -95,14 +103,12 @@ export async function action({ context, request }: ActionFunctionArgs) {
     /** Update the QR codes from the batch as printed */
     await markBatchAsPrinted({ batch });
 
-    return json(
-      data({
-        success: true,
-      })
-    );
+    return payload({
+      success: true,
+    });
   } catch (cause) {
     const reason = makeShelfError(cause, { userId });
-    throw json(error(reason), { status: reason.status });
+    throw data(error(reason), { status: reason.status });
   }
 }
 
@@ -128,15 +134,16 @@ export default function Area51() {
           hideFirstHeaderColumn
           headerChildren={
             <>
-              <Th className="hidden md:table-cell">QR id</Th>
-              <Th className="hidden md:table-cell">Asset</Th>
-              <Th className="hidden md:table-cell">Organization ID</Th>
-              <Th className="hidden md:table-cell">User ID</Th>
-              <Th className="hidden md:table-cell">
+              <Th>QR id</Th>
+              <Th>Asset</Th>
+              <Th>Kit</Th>
+              <Th>Organization ID</Th>
+              <Th>User ID</Th>
+              <Th>
                 <span title="Only available for batched codes">Printed</span>
               </Th>
-              <Th className="hidden md:table-cell">Batch</Th>
-              <Th className="hidden md:table-cell">Created at</Th>
+              <Th>Batch</Th>
+              <Th>Created at</Th>
             </>
           }
         />
@@ -154,6 +161,12 @@ const ListUserContent = ({
         select: {
           id: true;
           title: true;
+        };
+      };
+      kit: {
+        select: {
+          id: true;
+          name: true;
         };
       };
       organization: {
@@ -189,6 +202,11 @@ const ListUserContent = ({
     <Td className=" whitespace-normal p-0 md:p-0">
       <div className="flex justify-between gap-3 p-4 md:justify-normal md:px-6">
         {item.asset ? <span>{item.asset.title}</span> : "N/A"}
+      </div>
+    </Td>
+    <Td className=" whitespace-normal p-0 md:p-0">
+      <div className="flex justify-between gap-3 p-4 md:justify-normal md:px-6">
+        {item.kit ? <span>{item.kit.name}</span> : "N/A"}
       </div>
     </Td>
     <Td className=" p-0 md:p-0">

@@ -1,5 +1,6 @@
+import type { ReactNode } from "react";
 import type { InviteStatuses, User } from "@prisma/client";
-import { useFetcher } from "@remix-run/react";
+import { useFetcher } from "react-router";
 import {
   RefreshIcon,
   RemoveUserIcon,
@@ -12,8 +13,10 @@ import {
   DropdownMenuTrigger,
 } from "~/components/shared/dropdown";
 
-import { isFormProcessing } from "~/utils/form";
-import { useControlledDropdownMenu } from "~/utils/use-controlled-dropdown-menu";
+import { useControlledDropdownMenu } from "~/hooks/use-controlled-dropdown-menu";
+import { useDisabled } from "~/hooks/use-disabled";
+import { useUserData } from "~/hooks/use-user-data";
+import type { UserFriendlyRoles } from "~/routes/_layout+/settings.team";
 import { Button } from "../shared/button";
 import { Spinner } from "../shared/spinner";
 
@@ -23,28 +26,52 @@ export function TeamUsersActionsDropdown({
   name,
   teamMemberId,
   email,
+  isSSO,
+  customTrigger,
+  role,
 }: {
   userId: User["id"] | null;
   inviteStatus: InviteStatuses;
   name?: string;
   teamMemberId?: string;
   email: string;
+  isSSO: boolean;
+  customTrigger?: (disabled: boolean) => ReactNode;
+  role: UserFriendlyRoles;
 }) {
   const fetcher = useFetcher();
-  const disabled = isFormProcessing(fetcher.state);
+  const disabled = useDisabled(fetcher);
   const { ref, open, setOpen } = useControlledDropdownMenu();
+  const currentUser = useUserData();
+  const isCurrentUser = currentUser?.id === userId;
 
-  return (
+  /** Most users will have an invite, however we have to handle SSO case:
+   *
+   * 1. If the user has an invite, we show the "Resend invite" and "Cancel invite" buttons.
+   * 2. If the user has accepted the invite or doesn't have an invite but has userId(SSO), we show the "Revoke access" button.
+   */
+  const hasInvite = !!inviteStatus;
+
+  return hasInvite || (!hasInvite && isSSO) ? (
     <>
       <DropdownMenu
         modal={false}
         onOpenChange={(open) => setOpen(open)}
         open={open}
       >
-        <DropdownMenuTrigger className="size-6 pr-2 outline-none focus-visible:border-0">
-          <i className="inline-block px-3 py-0 text-gray-400 ">
-            {disabled ? <Spinner className="size-4" /> : <VerticalDotsIcon />}
-          </i>
+        <DropdownMenuTrigger className="w-full " asChild>
+          {customTrigger ? (
+            customTrigger(disabled)
+          ) : (
+            <Button
+              variant="tertiary"
+              width="full"
+              className="border-0 pr-0"
+              aria-label="Actions Trigger"
+            >
+              {disabled ? <Spinner className="size-4" /> : <VerticalDotsIcon />}
+            </Button>
+          )}
         </DropdownMenuTrigger>
         <DropdownMenuContent
           align="end"
@@ -59,11 +86,12 @@ export function TeamUsersActionsDropdown({
             }}
           >
             {/* Only show resend button if the invite is not accepted */}
-            {inviteStatus !== "ACCEPTED" ? (
+            {inviteStatus && inviteStatus !== "ACCEPTED" ? (
               <>
                 <input type="hidden" name="name" value={name} />
                 <input type="hidden" name="email" value={email} />
                 <input type="hidden" name="teamMemberId" value={teamMemberId} />
+                <input type="hidden" name="userFriendlyRole" value={role} />
                 <Button
                   type="submit"
                   variant="link"
@@ -92,7 +120,8 @@ export function TeamUsersActionsDropdown({
                 </Button>
               </>
             ) : null}
-            {inviteStatus === "ACCEPTED" ? (
+            {(hasInvite && inviteStatus === "ACCEPTED") ||
+            (!hasInvite && isSSO) ? (
               <>
                 {userId ? (
                   <input type="hidden" name="userId" value={userId} />
@@ -104,7 +133,13 @@ export function TeamUsersActionsDropdown({
                   width="full"
                   name="intent"
                   value="revokeAccess"
-                  disabled={disabled}
+                  disabled={
+                    isCurrentUser
+                      ? {
+                          reason: "You cannot revoke your own access",
+                        }
+                      : disabled
+                  }
                 >
                   <span className="flex items-center gap-2">
                     <RemoveUserIcon /> Revoke access
@@ -116,5 +151,5 @@ export function TeamUsersActionsDropdown({
         </DropdownMenuContent>
       </DropdownMenu>
     </>
-  );
+  ) : null;
 }

@@ -1,14 +1,14 @@
-import { useFetcher } from "@remix-run/react";
+import { useFetcher } from "react-router";
 import type { NotificationType } from "~/atoms/notifications";
 
 export function useClientNotification() {
   const fetcher = useFetcher();
   const submitter = ({
     title,
-    message,
+    message = null,
     icon,
   }: Omit<NotificationType, "open" | "senderId">) => {
-    fetcher.submit(
+    void fetcher.submit(
       {
         title,
         message,

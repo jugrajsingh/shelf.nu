@@ -1,5 +1,8 @@
 export const FREE_PLAN = {
   id: "free",
+  metadata: {
+    show_on_table: true,
+  },
   product: {
     name: "Free",
     metadata: {
@@ -12,7 +15,7 @@ export const FREE_PLAN = {
 				Automatic Upgrades, 
 				Server Maintenance
 			`,
-      slogan: "Free forever. No credit card required.",
+      slogan: "For personal use or hobby use.",
     },
   },
   unit_amount: 0,

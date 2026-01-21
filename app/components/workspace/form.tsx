@@ -1,14 +1,20 @@
-import type { Organization, $Enums } from "@prisma/client";
-import { Currency } from "@prisma/client";
-import { Form, useNavigation } from "@remix-run/react";
+import type { ReactNode } from "react";
+import { useEffect, useRef } from "react";
+import type { Organization, Currency } from "@prisma/client";
 import { useAtom, useAtomValue } from "jotai";
+import { useActionData, useLoaderData, useNavigation } from "react-router";
 import { useZorm } from "react-zorm";
 import { z } from "zod";
 import { updateDynamicTitleAtom } from "~/atoms/dynamic-title-atom";
-import { fileErrorAtom, validateFileAtom } from "~/atoms/file";
+import { defaultValidateFileAtom, fileErrorAtom } from "~/atoms/file";
+import { useSearchParams } from "~/hooks/search-params";
+import type { loader } from "~/routes/_layout+/account-details.workspace.new";
+import { ACCEPT_SUPPORTED_IMAGES } from "~/utils/constants";
 import { isFormProcessing } from "~/utils/form";
 import { zodFieldIsRequired } from "~/utils/zod";
+import { Form } from "../custom-form";
 import FormRow from "../forms/form-row";
+import { InnerLabel } from "../forms/inner-label";
 import Input from "../forms/input";
 import {
   Select,
@@ -17,6 +23,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "../forms/select";
+import { CrispButton } from "../marketing/crisp";
 import { Button } from "../shared/button";
 import { Card } from "../shared/card";
 import { Spinner } from "../shared/spinner";
@@ -30,15 +37,32 @@ export const NewWorkspaceFormSchema = z.object({
 interface Props {
   name?: Organization["name"];
   currency?: Organization["currency"];
+  children?: string | ReactNode;
 }
 
-export const WorkspaceForm = ({ name, currency }: Props) => {
+export const WorkspaceForm = ({ name, currency, children }: Props) => {
+  const actionData = useActionData<{ error?: any }>();
+  const { curriences } = useLoaderData<typeof loader>();
+  const [searchParams] = useSearchParams();
   const navigation = useNavigation();
   const zo = useZorm("NewQuestionWizardScreen", NewWorkspaceFormSchema);
   const disabled = isFormProcessing(navigation.state);
   const fileError = useAtomValue(fileErrorAtom);
-  const [, validateFile] = useAtom(validateFileAtom);
+  const [, validateFile] = useAtom(defaultValidateFileAtom);
   const [, updateTitle] = useAtom(updateDynamicTitleAtom);
+  const nameFieldRef = useRef<HTMLInputElement>(null);
+
+  const imageError =
+    (actionData?.error?.additionalData?.field === "image"
+      ? actionData?.error?.message
+      : undefined) ?? fileError;
+
+  useEffect(() => {
+    const team = searchParams.get("team");
+    if (!team && nameFieldRef.current) {
+      nameFieldRef.current.focus();
+    }
+  }, [searchParams]);
 
   return (
     <Card className="w-full md:w-min">
@@ -50,6 +74,9 @@ export const WorkspaceForm = ({ name, currency }: Props) => {
       >
         <FormRow
           rowLabel={"Name"}
+          subHeading={
+            "Choose a name that represents your Organization. Make it easily recognizable for your team members."
+          }
           className="border-b-0 pb-[10px] pt-0"
           required={zodFieldIsRequired(NewWorkspaceFormSchema.shape.name)}
         >
@@ -65,23 +92,30 @@ export const WorkspaceForm = ({ name, currency }: Props) => {
             defaultValue={name || undefined}
             placeholder=""
             required={zodFieldIsRequired(NewWorkspaceFormSchema.shape.name)}
+            ref={nameFieldRef}
           />
         </FormRow>
 
-        <FormRow rowLabel={"Main image"} className="border-b-0">
+        <FormRow
+          rowLabel={"Main image"}
+          className="border-b-0"
+          subHeading={
+            "Used to place your organization's logo or symbol. For best results, use a square image."
+          }
+        >
           <div>
             <p className="hidden lg:block">
               Accepts PNG, JPG or JPEG (max.4 MB)
             </p>
             <Input
               // disabled={disabled}
-              accept="image/png,.png,image/jpeg,.jpg,.jpeg"
+              accept={ACCEPT_SUPPORTED_IMAGES}
               name="image"
               type="file"
               onChange={validateFile}
               label={"Main image"}
               hideLabel
-              error={fileError}
+              error={imageError}
               className="mt-2"
               inputClassName="border-0 shadow-none p-0 rounded-none"
             />
@@ -92,8 +126,22 @@ export const WorkspaceForm = ({ name, currency }: Props) => {
         </FormRow>
 
         <div>
-          <label className="lg:hidden">Currency</label>
-          <FormRow rowLabel={"Currency"}>
+          <FormRow
+            rowLabel={"Currency"}
+            className={children ? "border-b-0" : ""}
+            subHeading={
+              <p>
+                Choose the currency for your workspace. If you don't see your
+                currency, please{" "}
+                <CrispButton variant="link" className="inline text-xs">
+                  contact support
+                </CrispButton>
+                .
+              </p>
+            }
+          >
+            <InnerLabel hideLg>Currency</InnerLabel>
+
             <Select
               defaultValue={currency || "USD"}
               disabled={disabled}
@@ -108,10 +156,10 @@ export const WorkspaceForm = ({ name, currency }: Props) => {
                 align="start"
               >
                 <div className=" max-h-[320px] overflow-auto">
-                  {Object.keys(Currency).map((value) => (
+                  {curriences.map((value) => (
                     <SelectItem value={value} key={value}>
                       <span className="mr-4 text-[14px] text-gray-700">
-                        {Currency[value as $Enums.Currency]}
+                        {value}
                       </span>
                     </SelectItem>
                   ))}
@@ -120,7 +168,6 @@ export const WorkspaceForm = ({ name, currency }: Props) => {
             </Select>
           </FormRow>
         </div>
-
         <div className="text-right">
           <Button type="submit" disabled={disabled}>
             {disabled ? <Spinner /> : "Save"}

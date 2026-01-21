@@ -1,22 +1,23 @@
-import type { LoaderFunctionArgs, MetaFunction } from "@remix-run/node";
-import { json, redirect, redirectDocument } from "@remix-run/node";
-import { useSearchParams } from "@remix-run/react";
+import { TagUseFor } from "@prisma/client";
 import { useAtomValue } from "jotai";
+import type { LoaderFunctionArgs, MetaFunction } from "react-router";
+import { data, redirect, redirectDocument, useLoaderData } from "react-router";
 import { dynamicTitleAtom } from "~/atoms/dynamic-title-atom";
-
 import { AssetForm, NewAssetFormSchema } from "~/components/assets/form";
 import Header from "~/components/layout/header";
-
+import { useSearchParams } from "~/hooks/search-params";
+import { estimateNextSequentialId } from "~/modules/asset/sequential-id.server";
 import {
   createAsset,
-  createNote,
   getAllEntriesForCreateAndEdit,
   updateAssetMainImage,
 } from "~/modules/asset/service.server";
 import { getActiveCustomFields } from "~/modules/custom-field/service.server";
+import { createNote } from "~/modules/note/service.server";
 import { assertWhetherQrBelongsToCurrentOrganization } from "~/modules/qr/service.server";
 import { buildTagsSet } from "~/modules/tag/service.server";
 import { appendToMetaTitle } from "~/utils/append-to-meta-title";
+import { extractBarcodesFromFormData } from "~/utils/barcode-form-data.server";
 import {
   extractCustomFieldValuesFromPayload,
   mergedSchema,
@@ -25,15 +26,16 @@ import { sendNotification } from "~/utils/emitter/send-notification.server";
 import { makeShelfError } from "~/utils/error";
 import {
   assertIsPost,
-  data,
+  payload,
   error,
   getCurrentSearchParams,
   parseData,
 } from "~/utils/http.server";
+import { wrapLinkForNote, wrapUserLinkForNote } from "~/utils/markdoc-wrappers";
 import {
   PermissionAction,
   PermissionEntity,
-} from "~/utils/permissions/permission.validator.server";
+} from "~/utils/permissions/permission.data";
 import { requirePermission } from "~/utils/roles.server";
 import { slugify } from "~/utils/slugify";
 
@@ -66,6 +68,7 @@ export async function loader({ context, request }: LoaderFunctionArgs) {
       await getAllEntriesForCreateAndEdit({
         organizationId,
         request,
+        tagUseFor: TagUseFor.ASSET,
       });
 
     const searchParams = getCurrentSearchParams(request);
@@ -75,22 +78,24 @@ export async function loader({ context, request }: LoaderFunctionArgs) {
       category: searchParams.get("category"),
     });
 
-    return json(
-      data({
-        header,
-        categories,
-        totalCategories,
-        tags,
-        totalTags: tags.length,
-        locations,
-        totalLocations,
-        currency: currentOrganization?.currency,
-        customFields,
-      })
-    );
+    // Estimate the next sequential ID that will be assigned to the new asset
+    const nextSequentialId = await estimateNextSequentialId(organizationId);
+
+    return payload({
+      header,
+      categories,
+      totalCategories,
+      tags,
+      totalTags: tags.length,
+      locations,
+      totalLocations,
+      currency: currentOrganization?.currency,
+      customFields,
+      nextSequentialId,
+    });
   } catch (cause) {
     const reason = makeShelfError(cause, { userId });
-    throw json(error(reason));
+    throw data(error(reason), { status: reason.status });
   }
 }
 
@@ -109,7 +114,7 @@ export async function action({ context, request }: LoaderFunctionArgs) {
   try {
     assertIsPost(request);
 
-    const { organizationId } = await requirePermission({
+    const { organizationId, canUseBarcodes } = await requirePermission({
       userId,
       request,
       entity: PermissionEntity.asset,
@@ -165,6 +170,11 @@ export async function action({ context, request }: LoaderFunctionArgs) {
     /** This checks if tags are passed and build the  */
     const tags = buildTagsSet(payload.tags);
 
+    /** Extract barcode data from form only if barcodes are enabled */
+    const barcodes = canUseBarcodes
+      ? extractBarcodesFromFormData(formData)
+      : [];
+
     const asset = await createAsset({
       organizationId,
       title,
@@ -176,6 +186,7 @@ export async function action({ context, request }: LoaderFunctionArgs) {
       tags,
       valuation,
       customFieldsValues,
+      barcodes,
     });
 
     // Not sure how to handle this failing as the asset is already created
@@ -183,6 +194,8 @@ export async function action({ context, request }: LoaderFunctionArgs) {
       request,
       assetId: asset.id,
       userId: authSession.userId,
+      organizationId,
+      isNewAsset: true,
     });
 
     sendNotification({
@@ -192,18 +205,25 @@ export async function action({ context, request }: LoaderFunctionArgs) {
       senderId: authSession.userId,
     });
 
+    const actor = wrapUserLinkForNote({
+      id: authSession.userId,
+      firstName: asset.user.firstName,
+      lastName: asset.user.lastName,
+    });
     await createNote({
-      content: `Asset was created by **${asset.user.firstName?.trim()} ${asset.user.lastName?.trim()}**`,
+      content: `Asset was created by ${actor}.`,
       type: "UPDATE",
       userId: authSession.userId,
       assetId: asset.id,
     });
 
     if (asset.location) {
+      const locationLink = wrapLinkForNote(
+        `/locations/${asset.location.id}`,
+        asset.location.name.trim()
+      );
       await createNote({
-        content: `**${asset.user.firstName?.trim()} ${asset.user.lastName?.trim()}** set the location of **${asset.title?.trim()}** to *[${asset.location.name.trim()}](/locations/${
-          asset.location.id
-        })**`,
+        content: `${actor} set the location  to ${locationLink}.`,
         type: "UPDATE",
         userId: authSession.userId,
         assetId: asset.id,
@@ -218,20 +238,29 @@ export async function action({ context, request }: LoaderFunctionArgs) {
     return redirect(`/assets`);
   } catch (cause) {
     const reason = makeShelfError(cause, { userId });
-    return json(error(reason), { status: reason.status });
+    return data(error(reason), { status: reason.status });
   }
 }
 
 export default function NewAssetPage() {
   const title = useAtomValue(dynamicTitleAtom);
+  const { nextSequentialId } = useLoaderData<typeof loader>();
   const [searchParams] = useSearchParams();
   const qrId = searchParams.get("qrId");
+
+  // Get category from URL params or use the default passed prop
+  const categoryFromUrl = searchParams.get("category");
+
   return (
-    <>
+    <div className="relative">
       <Header title={title ? title : "Untitled Asset"} />
       <div>
-        <AssetForm qrId={qrId} />
+        <AssetForm
+          qrId={qrId}
+          categoryId={categoryFromUrl}
+          sequentialId={nextSequentialId}
+        />
       </div>
-    </>
+    </div>
   );
 }

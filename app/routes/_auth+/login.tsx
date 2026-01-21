@@ -2,31 +2,42 @@ import type {
   ActionFunctionArgs,
   LoaderFunctionArgs,
   MetaFunction,
-} from "@remix-run/node";
-import { json, redirect } from "@remix-run/node";
+} from "react-router";
 import {
-  Form,
+  data,
+  redirect,
   useActionData,
+  useLoaderData,
   useNavigation,
-  useSearchParams,
-} from "@remix-run/react";
+} from "react-router";
+
 import { useZorm } from "react-zorm";
 import { z } from "zod";
+import { Form } from "~/components/custom-form";
 
 import Input from "~/components/forms/input";
 import PasswordInput from "~/components/forms/password-input";
 import { Button } from "~/components/shared/button";
+import { config } from "~/config/shelf.config";
+import { useSearchParams } from "~/hooks/search-params";
 import { ContinueWithEmailForm } from "~/modules/auth/components/continue-with-email-form";
 import { signInWithEmail } from "~/modules/auth/service.server";
 
-import { setSelectedOrganizationIdCookie } from "~/modules/organization/context.server";
-import { getOrganizationByUserId } from "~/modules/organization/service.server";
+import {
+  getSelectedOrganization,
+  setSelectedOrganizationIdCookie,
+} from "~/modules/organization/context.server";
 import { appendToMetaTitle } from "~/utils/append-to-meta-title";
 import { setCookie } from "~/utils/cookies.server";
-import { makeShelfError, notAllowedMethod } from "~/utils/error";
+import {
+  isLikeShelfError,
+  isZodValidationError,
+  makeShelfError,
+  notAllowedMethod,
+} from "~/utils/error";
 import { isFormProcessing } from "~/utils/form";
 import {
-  data,
+  payload,
   error,
   getActionMethod,
   parseData,
@@ -37,12 +48,13 @@ import { validEmail } from "~/utils/misc";
 export function loader({ context }: LoaderFunctionArgs) {
   const title = "Log in";
   const subHeading = "Welcome back! Enter your details below to log in.";
+  const { disableSignup, disableSSO } = config;
 
   if (context.isAuthenticated) {
     return redirect("/assets");
   }
 
-  return json(data({ title, subHeading }));
+  return data(payload({ title, subHeading, disableSignup, disableSSO }));
 }
 
 const LoginFormSchema = z.object({
@@ -72,10 +84,16 @@ export async function action({ context, request }: ActionFunctionArgs) {
         if (!authSession) {
           return redirect(`/otp?email=${encodeURIComponent(email)}&mode=login`);
         }
+        const { userId } = authSession;
 
-        const personalOrganization = await getOrganizationByUserId({
-          userId: authSession.userId,
-          orgType: "PERSONAL",
+        /**
+         * The only reason we need to do this is because of the initial login
+         * Theoretically, the user should always have a selected organization cookie as soon as they login for the first time
+         * However we do this check to make sure they are still part of that organization
+         */
+        const { organizationId } = await getSelectedOrganization({
+          userId,
+          request,
         });
 
         // Set the auth session and redirect to the assets page
@@ -83,9 +101,7 @@ export async function action({ context, request }: ActionFunctionArgs) {
 
         return redirect(safeRedirect(redirectTo || "/assets"), {
           headers: [
-            setCookie(
-              await setSelectedOrganizationIdCookie(personalOrganization.id)
-            ),
+            setCookie(await setSelectedOrganizationIdCookie(organizationId)),
           ],
         });
       }
@@ -93,8 +109,14 @@ export async function action({ context, request }: ActionFunctionArgs) {
 
     throw notAllowedMethod(method);
   } catch (cause) {
-    const reason = makeShelfError(cause);
-    return json(error(reason), { status: reason.status });
+    const reason = makeShelfError(
+      cause,
+      undefined,
+      isLikeShelfError(cause)
+        ? cause.shouldBeCaptured
+        : !isZodValidationError(cause)
+    );
+    return data(error(reason), { status: reason.status });
   }
 }
 
@@ -103,10 +125,12 @@ export const meta: MetaFunction<typeof loader> = ({ data }) => [
 ];
 
 export default function IndexLoginForm() {
+  const { disableSignup, disableSSO } = useLoaderData<typeof loader>();
   const zo = useZorm("NewQuestionWizardScreen", LoginFormSchema);
   const [searchParams] = useSearchParams();
   const redirectTo = searchParams.get("redirectTo") ?? undefined;
   const acceptedInvite = searchParams.get("acceptedInvite");
+  const passwordReset = searchParams.get("password_reset");
   const data = useActionData<typeof action>();
 
   const navigation = useNavigation();
@@ -120,6 +144,13 @@ export default function IndexLoginForm() {
           workspace.
         </div>
       ) : null}
+
+      {passwordReset ? (
+        <div className="mb-8 text-center text-success-600">
+          You have successfully reset your password. You can now use your new
+          password to login.
+        </div>
+      ) : null}
       <Form ref={zo.ref} method="post" replace className="flex flex-col gap-5">
         <div>
           <Input
@@ -130,7 +161,7 @@ export default function IndexLoginForm() {
             autoFocus={true}
             name={zo.fields.email()}
             type="email"
-            autoComplete="email"
+            autoComplete="username"
             disabled={disabled}
             inputClassName="w-full"
             error={zo.errors.email()?.message || data?.error.message}
@@ -141,7 +172,7 @@ export default function IndexLoginForm() {
           placeholder="**********"
           data-test-id="password"
           name={zo.fields.password()}
-          autoComplete="new-password"
+          autoComplete="current-password"
           disabled={disabled}
           inputClassName="w-full"
           error={zo.errors.password()?.message || data?.error.message}
@@ -170,6 +201,14 @@ export default function IndexLoginForm() {
           </div>
         </div>
       </Form>
+      {!disableSSO && (
+        <div className="mt-6 text-center">
+          <Button variant="link" to="/sso-login">
+            Login with SSO
+          </Button>
+        </div>
+      )}
+
       <div className="mt-6">
         <div className="relative">
           <div className="absolute inset-0 flex items-center">
@@ -187,19 +226,21 @@ export default function IndexLoginForm() {
         <div className="mt-6">
           <ContinueWithEmailForm mode="login" />
         </div>
-        <div className="mt-6 text-center text-sm text-gray-500">
-          Don't have an account?{" "}
-          <Button
-            variant="link"
-            data-test-id="signupButton"
-            to={{
-              pathname: "/join",
-              search: searchParams.toString(),
-            }}
-          >
-            Sign up
-          </Button>
-        </div>
+        {disableSignup ? null : (
+          <div className="mt-6 text-center text-sm text-gray-500">
+            Don't have an account?{" "}
+            <Button
+              variant="link"
+              data-test-id="signupButton"
+              to={{
+                pathname: "/join",
+                search: searchParams.toString(),
+              }}
+            >
+              Sign up
+            </Button>
+          </div>
+        )}
       </div>
     </div>
   );
