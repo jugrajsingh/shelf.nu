@@ -1,0 +1,143 @@
+import type { Booking } from "@prisma/client";
+import { ChevronRightIcon, ListChecks } from "lucide-react";
+import { useControlledDropdownMenu } from "~/hooks/use-controlled-dropdown-menu";
+import { tw } from "~/utils/tw";
+import CheckinDialog from "./checkin-dialog";
+import { Button } from "../shared/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "../shared/dropdown";
+import { MobileDropdownStyles } from "../shared/mobile-dropdown-styles";
+
+type CheckinDropdownProps = {
+  disabled?: boolean;
+  booking: Pick<Booking, "id" | "name" | "from" | "to">;
+  portalContainer?: HTMLElement;
+  /** Form ID for explicit form association when buttons render in a portal */
+  formId?: string;
+  requireExplicitCheckin?: boolean;
+};
+
+export default function CheckinDropdown({
+  disabled,
+  booking,
+  portalContainer,
+  formId,
+  requireExplicitCheckin,
+}: CheckinDropdownProps) {
+  const {
+    ref: dropdownRef,
+    defaultApplied,
+    open,
+    defaultOpen,
+    setOpen,
+  } = useControlledDropdownMenu();
+
+  function closeMenu() {
+    setOpen(false);
+  }
+
+  // When explicit check-in is required, render a single button that navigates
+  // directly to the explicit check-in page (no dropdown, no quick check-in)
+  if (requireExplicitCheckin) {
+    return (
+      <Button
+        disabled={disabled}
+        className="grow"
+        size="sm"
+        to={`/bookings/${booking.id}/overview/checkin-assets`}
+      >
+        Check-in
+      </Button>
+    );
+  }
+
+  return (
+    <>
+      {open && (
+        <div className="fixed right-0 top-0 z-10 h-screen w-screen cursor-pointer bg-gray-700/50 transition duration-300 ease-in-out md:hidden" />
+      )}
+
+      <DropdownMenu
+        modal={false}
+        open={open}
+        defaultOpen={defaultOpen}
+        onOpenChange={(openValue) => {
+          if (defaultApplied && window.innerWidth <= 640) {
+            setOpen(openValue);
+          }
+        }}
+      >
+        <DropdownMenuTrigger
+          className="hidden sm:flex"
+          onClick={() => {
+            setOpen(!open);
+          }}
+          asChild
+        >
+          <Button type="button" disabled={disabled} className="grow" size="sm">
+            <span className="flex items-center gap-2">
+              Check-in <ChevronRightIcon className="chev size-4 rotate-90" />
+            </span>
+          </Button>
+        </DropdownMenuTrigger>
+
+        {/* Mobile button */}
+        <Button
+          type="button"
+          className="flex-1 sm:hidden"
+          onClick={() => setOpen(true)}
+          disabled={disabled}
+          size="sm"
+        >
+          <span className="flex items-center gap-2">
+            Check-in <ChevronRightIcon className="chev size-4" />
+          </span>
+        </Button>
+
+        <MobileDropdownStyles open={open} />
+
+        <DropdownMenuContent
+          ref={dropdownRef}
+          asChild
+          className="order actions-dropdown w-screen rounded-b-none rounded-t bg-white p-0 text-right md:static md:w-56"
+          align="end"
+          portalContainer={portalContainer}
+        >
+          <div className="fixed bottom-0 left-0">
+            <DropdownMenuItem className="py-1 lg:p-0">
+              <CheckinDialog
+                booking={booking}
+                disabled={disabled}
+                portalContainer={portalContainer}
+                formId={formId}
+                onClose={closeMenu}
+                label="Quick check-in"
+                variant="dropdown"
+              />
+            </DropdownMenuItem>
+            <DropdownMenuItem className="py-1 lg:p-0">
+              <Button
+                variant="link"
+                className={tw(
+                  "w-full justify-start px-4 py-3 text-gray-700 hover:text-gray-700"
+                )}
+                width="full"
+                onClick={closeMenu}
+                disabled={disabled}
+                to={`/bookings/${booking.id}/overview/checkin-assets`}
+              >
+                <span className="flex items-center gap-2">
+                  <ListChecks className="size-4" /> Explicit check-in
+                </span>
+              </Button>
+            </DropdownMenuItem>
+          </div>
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </>
+  );
+}

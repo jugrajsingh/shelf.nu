@@ -1,4 +1,8 @@
 {
+  "env": {
+    "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"
+  },
+  "enabledMcpjsonServers": ["supabase-local"],
   "hooks": {
     "Stop": [
       {
@@ -24,15 +28,70 @@
     ]
   },
   "permissions": {
+    "allow": [
+      "Bash(find:*)",
+      "Bash(xargs:*)",
+      "Bash(ls:*)",
+      "Bash(npm view:*)",
+      "Bash(gh pr view:*)",
+      "Bash(gh pr diff:*)",
+      "Bash(gh api:*)",
+      "Bash(git status:*)",
+      "Bash(git add:*)",
+      "Bash(gh pr:*)",
+      "Bash(pnpm turbo typecheck:*)",
+      "Bash(pnpm --filter @shelf/webapp exec prisma generate:*)",
+      "Bash(pnpm --filter @shelf/webapp test -- --run)",
+      "Bash(pnpm --filter @shelf/webapp test:*)",
+      "Bash(grep:*)",
+      "Bash(pnpm run typecheck:*)",
+      "Bash(pnpm webapp:validate:*)",
+      "Bash(pnpm webapp:build:*)",
+      "Bash(pnpm --filter @shelf/docs build:*)",
+      "Bash(node -e:*)",
+      "Bash(pnpm:*)",
+      "Bash(pnpm install:*)",
+      "Bash(pnpm --filter @shelf/database exec tsc:*)",
+      "Bash(pnpm turbo build:*)",
+      "Bash(pnpm webapp:test:*)",
+      "Bash(pnpm db:generate:*)",
+      "Bash(npx tsc:*)",
+      "WebSearch",
+      "WebFetch(domain:www.npmjs.com)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:docs.stripe.com)",
+      "WebFetch(domain:docs.sentry.io)",
+      "mcp__sentry__find_organizations",
+      "mcp__sentry__find_projects",
+      "mcp__sentry__get_issue_details",
+      "mcp__sentry__search_issues"
+    ],
     "deny": [
-      "Read(./.env)",
+      "Read(**/.env)",
       "Read(**/.env.local)",
       "Read(**/.env.development)",
       "Read(**/.env.production)",
       "Read(**/.env.staging)",
       "Read(**/.env.test)",
-      "Write(./.env)",
+      "Write(**/.env)",
       "Write(**/.env.*)"
+    ],
+    "ask": [
+      "Bash(git push:*)",
+      "Bash(git commit:*)",
+      "Bash(git reset --hard:*)",
+      "Bash(git branch -D:*)",
+      "Bash(git clean -f:*)",
+      "Bash(git clean -fd:*)",
+      "Bash(git clean -fdx:*)",
+      "Bash(git checkout --:*)",
+      "Bash(rm -rf:*)",
+      "Bash(rm -fr:*)",
+      "Bash(rm -r -f:*)",
+      "Bash(pnpm db:reset:*)",
+      "Bash(prisma migrate reset:*)",
+      "Bash(npx prisma migrate reset:*)",
+      "Bash(pnpm --filter @shelf/database exec prisma migrate reset:*)"
     ]
   }
 }

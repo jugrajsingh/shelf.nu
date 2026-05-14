@@ -1,0 +1,522 @@
+import type { BookingSettings } from "@prisma/client";
+import { BookingStatus } from "@prisma/client";
+import { addHours, differenceInHours } from "date-fns";
+import { DateTime } from "luxon";
+import { z } from "zod";
+import type { WorkingHoursData } from "~/modules/working-hours/types";
+import {
+  calculateBusinessHoursDuration,
+  getOverrideDateKey,
+  normalizeWorkingHoursForValidation,
+} from "~/modules/working-hours/utils";
+import type { getHints } from "~/utils/client-hints";
+
+/**
+ * Parses a `datetime-local` wire string (e.g. `"2026-05-01T16:10"`) in the
+ * user's timezone using Luxon. The HTML `datetime-local` input emits values
+ * without an offset, so `new Date(value)` interprets them in the server's
+ * local zone (UTC in production), which silently corrupts validation.
+ *
+ * Returns a Zod string schema whose `.transform()` yields a correct Date.
+ *
+ * @param timeZone - IANA zone (from `getHints(request).timeZone`). Falls back
+ *   to UTC if missing.
+ */
+function coerceLocalDate(timeZone?: string) {
+  const zone = timeZone ?? "UTC";
+  // Accept a `datetime-local` wire string (production), a full ISO string
+  // (existing call sites), or a Date object (existing unit tests). `fromISO`
+  // with a `zone` hint applies the zone only when the string has no offset.
+  return z
+    .union([z.string().min(1, "Date is required"), z.date()])
+    .transform((val, ctx) => {
+      if (val instanceof Date) return val;
+      const dt = DateTime.fromISO(val, { zone });
+      if (!dt.isValid) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "Invalid date format",
+        });
+        return z.NEVER;
+      }
+      return dt.toJSDate();
+    });
+}
+
+type ValidationResult = { isValid: true } | { isValid: false; message: string };
+
+/**
+ * Validates if a datetime falls within working hours.
+ *
+ * `dateTime` is an absolute instant. To read weekday / time-of-day / calendar
+ * date the way the user intended, we must extract components in the user's
+ * timezone — otherwise NY 16:00 becomes UTC 20:00 on the server and a valid
+ * afternoon booking fails the 9–17 working-hours check.
+ *
+ * @param dateTime - The booking instant (typically produced by `coerceLocalDate`).
+ * @param workingHours - The org's working-hours config.
+ * @param timeZone - IANA zone for the booking user. Falls back to server-local
+ *   when omitted, preserving the legacy code path for callers that have no zone.
+ */
+function validateWorkingHours(
+  dateTime: Date,
+  workingHours: WorkingHoursData,
+  timeZone?: string
+): ValidationResult {
+  // If working hours are disabled, all times are valid
+  if (!workingHours.enabled) {
+    return { isValid: true };
+  }
+
+  // Extract weekday/time/date in the user's zone when known. Luxon's `weekday`
+  // is 1=Mon..7=Sun; `% 7` maps it back to JS `getDay()` semantics (0=Sun..6=Sat)
+  // which match the `weeklySchedule` keys produced elsewhere in the codebase.
+  const local = timeZone
+    ? DateTime.fromJSDate(dateTime).setZone(timeZone)
+    : DateTime.fromJSDate(dateTime);
+  const dayOfWeek = (local.weekday % 7).toString();
+  const timeString = local.toFormat("HH:mm");
+  const dateString = local.toFormat("yyyy-MM-dd");
+
+  // Check for date-specific overrides first. Overrides are stored as
+  // UTC-midnight timestamps that represent an absolute calendar date, so we
+  // read their date key from UTC instead of formatting in the runtime's local
+  // timezone — otherwise a "4/24 closed" override ends up matching a 4/23
+  // booking for any user west of UTC (America/* timezones).
+  const override = workingHours.overrides.find(
+    (override) => getOverrideDateKey(override.date) === dateString
+  );
+
+  if (override) {
+    if (!override.isOpen) {
+      return {
+        isValid: false,
+        message: `This date is closed${
+          override.reason ? ` (${override.reason})` : ""
+        }`,
+      };
+    }
+
+    // Validate time against override hours (absolute comparison)
+    if (override.openTime && override.closeTime) {
+      if (timeString < override.openTime || timeString > override.closeTime) {
+        return {
+          isValid: false,
+          message: `Time must be between ${override.openTime} and ${override.closeTime}`,
+        };
+      }
+    }
+
+    return { isValid: true };
+  }
+
+  // Check regular weekly schedule
+  const daySchedule = workingHours.weeklySchedule[dayOfWeek];
+
+  if (!daySchedule || !daySchedule.isOpen) {
+    const dayNames = [
+      "Sunday",
+      "Monday",
+      "Tuesday",
+      "Wednesday",
+      "Thursday",
+      "Friday",
+      "Saturday",
+    ] as const;
+    return {
+      isValid: false,
+      message: `${dayNames[parseInt(dayOfWeek)]} is not a working day`,
+    };
+  }
+
+  // Validate time against regular working hours (absolute comparison)
+  if (daySchedule.openTime && daySchedule.closeTime) {
+    if (
+      timeString < daySchedule.openTime ||
+      timeString > daySchedule.closeTime
+    ) {
+      return {
+        isValid: false,
+        message: `Time must be between ${daySchedule.openTime} and ${daySchedule.closeTime}`,
+      };
+    }
+  }
+
+  return { isValid: true };
+}
+
+/**
+ * Validates if a date is in the future with buffer time
+ */
+function validateFutureDate(
+  date: Date,
+  bufferStartTime: number,
+  _timeZone?: string
+): ValidationResult {
+  // why: `date` is now an absolute instant produced by `coerceLocalDate` in
+  // the user's zone, so a plain `new Date()` is the correct comparand.
+  // The previous toLocaleString/Date round-trip computed `now` in the wrong
+  // zone and triggered false "in the past" errors near the wall-clock moment.
+  const now = new Date();
+
+  // Only apply buffer if bufferStartTime is greater than 0
+  const hasBuffer = bufferStartTime > 0;
+  const minimumTime = hasBuffer ? addHours(now, bufferStartTime) : now;
+
+  if (date <= minimumTime) {
+    if (hasBuffer) {
+      return {
+        isValid: false,
+        message: `Start date must be at least ${bufferStartTime} hour${
+          bufferStartTime !== 1 ? "s" : ""
+        } from now`,
+      };
+    } else {
+      return { isValid: false, message: "Start date must be in the future" };
+    }
+  }
+
+  return { isValid: true };
+}
+
+interface BookingFormSchemaParams {
+  hints?: ReturnType<typeof getHints>;
+  action: "new" | "save" | "reserve";
+  status?: BookingStatus;
+  workingHours: any; // Accept any type, normalize internally
+  bookingSettings: {
+    bufferStartTime: number; // Required buffer parameter
+    tagsRequired: boolean; // Whether tags are required for bookings
+    maxBookingLength: number | null; // Maximum booking length in hours
+    maxBookingLengthSkipClosedDays: boolean; // Whether to skip closed days in max booking length calculation
+  };
+  /**
+   * When true, time restrictions (bufferStartTime and maxBookingLength) are skipped.
+   * This should be set to true for ADMIN and OWNER users who should be able to
+   * create bookings without time restrictions.
+   */
+  isAdminOrOwner?: boolean;
+}
+
+/**
+ * Returns a Zod validation schema for the booking form based on the action and booking status.
+ *
+ * Validation logic depends on two factors: the booking `status` and the `action` being performed.
+ *
+ * - Action: "new"
+ *   - All fields are updated.
+ *
+ * - Action: "save"
+ *   - If status is "DRAFT":
+ *     - All fields are updated.
+ *   - If status is "RESERVED", "ONGOING", or "OVERDUE":
+ *     - Only `name` and `description` are updated.
+ *
+ * - Action: "reserve"
+ *   - All fields are updated.
+ *
+ * - Other actions:
+ *   - No relevant fields are updated.
+ *   - Only base-level validation applies.
+ */
+export function BookingFormSchema({
+  hints,
+  action,
+  status,
+  workingHours: rawWorkingHours,
+  bookingSettings,
+  isAdminOrOwner = false,
+}: BookingFormSchemaParams) {
+  const {
+    bufferStartTime,
+    tagsRequired,
+    maxBookingLength,
+    maxBookingLengthSkipClosedDays,
+  } = bookingSettings;
+
+  // For ADMIN/OWNER users, time restrictions (buffer and max length) are bypassed
+  // They can still be restricted by working hours if enabled
+  const effectiveBufferStartTime = isAdminOrOwner ? 0 : bufferStartTime;
+  const effectiveMaxBookingLength = isAdminOrOwner ? null : maxBookingLength;
+
+  // Transform and validate working hours data
+  const workingHours = normalizeWorkingHoursForValidation(rawWorkingHours);
+
+  // Base schema - let TypeScript infer the complex Zod types
+  const baseSchema = z.object({
+    name: z.string().min(2, "Name is required"),
+    assetIds: z.array(z.string()).optional(),
+    description: z.string().optional(),
+    custodian: z
+      .string()
+      .transform((val, ctx) => {
+        if (!val && val === "") {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: "Please select a custodian",
+          });
+          return z.NEVER;
+        }
+        return JSON.parse(val);
+      })
+      .pipe(
+        z.object({
+          id: z.string(),
+          name: z.string(),
+          userId: z.string().optional().nullable(),
+        })
+      ),
+    startDate: coerceLocalDate(hints?.timeZone).optional(),
+    endDate: coerceLocalDate(hints?.timeZone).optional(),
+    tags: tagsRequired
+      ? z.string().min(1, "At least one tag is required")
+      : z.string().optional(),
+  });
+
+  // Create enhanced date schemas with working hours and buffer validation
+  const createValidatedStartDateSchema = () =>
+    coerceLocalDate(hints?.timeZone).superRefine((data, ctx) => {
+      // 1. Validate future date with buffer (skipped for ADMIN/OWNER when effectiveBufferStartTime is 0)
+      const futureValidation = validateFutureDate(
+        data,
+        effectiveBufferStartTime,
+        hints?.timeZone
+      );
+      if (!futureValidation.isValid) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: futureValidation.message,
+        });
+        return;
+      }
+
+      // 2. Validate working hours if available
+      if (workingHours && hints?.timeZone) {
+        const workingHoursValidation = validateWorkingHours(
+          data,
+          workingHours,
+          hints.timeZone
+        );
+        if (!workingHoursValidation.isValid) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: workingHoursValidation.message,
+          });
+        }
+      }
+    });
+
+  const createValidatedEndDateSchema = () =>
+    coerceLocalDate(hints?.timeZone).superRefine((data, ctx) => {
+      // Only validate working hours for end date (no future date requirement)
+      if (workingHours && hints?.timeZone) {
+        const validation = validateWorkingHours(
+          data,
+          workingHours,
+          hints.timeZone
+        );
+        if (!validation.isValid) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: validation.message,
+          });
+        }
+      }
+    });
+
+  const crossFieldDateValidation = (data: any, ctx: z.RefinementCtx) => {
+    if (data.endDate && data.startDate && data.endDate <= data.startDate) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "End date cannot be earlier than start date",
+        path: ["endDate"],
+      });
+    }
+
+    // Validate maximum booking length if configured (skipped for ADMIN/OWNER when effectiveMaxBookingLength is null)
+    if (effectiveMaxBookingLength && data.endDate && data.startDate) {
+      const startDate = new Date(data.startDate);
+      const endDate = new Date(data.endDate);
+
+      let durationInHours: number;
+
+      if (maxBookingLengthSkipClosedDays && workingHours?.enabled) {
+        // When skipping closed days, calculate only the business hours duration
+        durationInHours = calculateBusinessHoursDuration(
+          startDate,
+          endDate,
+          workingHours
+        );
+      } else {
+        // Standard calendar hours calculation
+        durationInHours = differenceInHours(endDate, startDate);
+      }
+
+      if (durationInHours > effectiveMaxBookingLength) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `Booking duration cannot exceed ${effectiveMaxBookingLength} hours`,
+          path: ["endDate"],
+        });
+      }
+    }
+  };
+
+  // Enhanced schema with date validation
+  const fullSchema = baseSchema.extend({
+    startDate: createValidatedStartDateSchema(),
+    endDate: createValidatedEndDateSchema(),
+  });
+
+  // Schema with ID field for existing bookings
+  const fullSchemaWithId = fullSchema.extend({ id: z.string() });
+
+  // Return appropriate schema based on action
+  switch (action) {
+    case "new": {
+      return fullSchema.superRefine(crossFieldDateValidation);
+    }
+
+    case "reserve": {
+      return fullSchemaWithId.superRefine(crossFieldDateValidation);
+    }
+
+    case "save": {
+      if (!status) {
+        throw new Error("Status is required for save action.");
+      }
+
+      switch (status) {
+        case BookingStatus.DRAFT: {
+          return fullSchemaWithId.superRefine(crossFieldDateValidation);
+        }
+
+        case BookingStatus.RESERVED:
+        case BookingStatus.ONGOING:
+        case BookingStatus.OVERDUE: {
+          // Only basic fields can be updated for active bookings
+          return baseSchema;
+        }
+
+        default: {
+          return baseSchema;
+        }
+      }
+    }
+
+    default: {
+      return baseSchema;
+    }
+  }
+}
+
+export type BookingFormSchemaType = ReturnType<typeof BookingFormSchema>;
+
+interface ExtendBookingSchemaParams {
+  workingHours?: any;
+  timeZone?: string;
+  bookingSettings: Pick<
+    BookingSettings,
+    "bufferStartTime" | "maxBookingLength" | "maxBookingLengthSkipClosedDays"
+  >;
+  /**
+   * When true, time restrictions (bufferStartTime and maxBookingLength) are skipped.
+   * This should be set to true for ADMIN and OWNER users who should be able to
+   * extend bookings without time restrictions.
+   */
+  isAdminOrOwner?: boolean;
+}
+
+export function ExtendBookingSchema({
+  workingHours: rawWorkingHours,
+  timeZone,
+  bookingSettings,
+  isAdminOrOwner = false,
+}: ExtendBookingSchemaParams) {
+  const { bufferStartTime, maxBookingLength, maxBookingLengthSkipClosedDays } =
+    bookingSettings;
+
+  // For ADMIN/OWNER users, time restrictions (buffer and max length) are bypassed
+  // They can still be restricted by working hours if enabled
+  const effectiveBufferStartTime = isAdminOrOwner ? 0 : bufferStartTime;
+  const effectiveMaxBookingLength = isAdminOrOwner ? null : maxBookingLength;
+
+  // Transform and validate working hours data (same as BookingFormSchema)
+  const workingHours = normalizeWorkingHoursForValidation(rawWorkingHours);
+
+  return z
+    .object({
+      // Hidden field carrying the booking's existing start date. Parse with
+      // the user's zone so the cross-field max-length check below operates on
+      // an absolute instant rather than reinterpreting a bare datetime-local
+      // string in the server zone.
+      startDate: coerceLocalDate(timeZone),
+      endDate: coerceLocalDate(timeZone).superRefine((dateTime, ctx) => {
+        // 1. Validate future date with buffer using existing function (skipped for ADMIN/OWNER)
+        const futureValidation = validateFutureDate(
+          dateTime,
+          effectiveBufferStartTime,
+          timeZone
+        );
+        if (!futureValidation.isValid) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: futureValidation.message,
+          });
+          return;
+        }
+
+        // 2. Validate working hours using existing function
+        if (workingHours) {
+          const workingHoursValidation = validateWorkingHours(
+            dateTime,
+            workingHours,
+            timeZone
+          );
+          if (!workingHoursValidation.isValid) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              message: workingHoursValidation.message,
+            });
+          }
+        }
+      }),
+    })
+    .superRefine((data, ctx) => {
+      // Cross-field validation for maximum booking length (skipped for ADMIN/OWNER)
+      if (effectiveMaxBookingLength && data.startDate && data.endDate) {
+        const { startDate, endDate } = data;
+
+        let durationInHours: number;
+
+        if (maxBookingLengthSkipClosedDays && workingHours?.enabled) {
+          // When skipping closed days, calculate only the business hours duration
+          durationInHours = calculateBusinessHoursDuration(
+            startDate,
+            endDate,
+            workingHours
+          );
+        } else {
+          // Standard calendar hours calculation
+          durationInHours = differenceInHours(endDate, startDate);
+        }
+
+        if (durationInHours > effectiveMaxBookingLength) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: `Booking duration cannot exceed ${effectiveMaxBookingLength} hours`,
+            path: ["endDate"],
+          });
+        }
+      }
+    });
+}
+
+export type ExtendBookingSchemaType = ReturnType<typeof ExtendBookingSchema>;
+
+export const CancelBookingSchema = z.object({
+  cancellationReason: z
+    .string()
+    .max(500, "Cancellation reason must be 500 characters or less")
+    .optional(),
+});
