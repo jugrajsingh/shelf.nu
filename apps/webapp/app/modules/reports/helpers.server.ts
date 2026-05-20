@@ -1638,16 +1638,29 @@ interface CustodySnapshotArgs {
 export async function custodySnapshotReport(
   args: CustodySnapshotArgs
 ): Promise<ReportPayload<CustodySnapshotRow>> {
-  const { organizationId, teamMemberId, page = 1, pageSize = 50 } = args;
+  const {
+    organizationId,
+    teamMemberId,
+    locationId,
+    page = 1,
+    pageSize = 50,
+  } = args;
 
   const startTime = performance.now();
 
   try {
-    // Build where clause for custody records
+    // Build where clause for custody records. Location filtering operates on
+    // the underlying asset; the `"without-location"` sentinel mirrors the
+    // Simple-mode Assets index convention for "no location set".
+    const assetWhere: Prisma.AssetWhereInput = { organizationId };
+    if (locationId === "without-location") {
+      assetWhere.locationId = null;
+    } else if (locationId) {
+      assetWhere.locationId = locationId;
+    }
+
     const where: Prisma.CustodyWhereInput = {
-      asset: {
-        organizationId,
-      },
+      asset: assetWhere,
     };
 
     if (teamMemberId) {
@@ -2315,7 +2328,7 @@ async function computeDistributionByCategory(
     .filter((id): id is string => id !== null);
 
   const categories = await db.category.findMany({
-    where: { id: { in: categoryIds } },
+    where: { id: { in: categoryIds }, organizationId },
     select: { id: true, name: true },
   });
 
@@ -2353,7 +2366,7 @@ async function computeDistributionByLocation(
     .filter((id): id is string => id !== null);
 
   const locations = await db.location.findMany({
-    where: { id: { in: locationIds } },
+    where: { id: { in: locationIds }, organizationId },
     select: { id: true, name: true },
   });
 
@@ -3253,7 +3266,7 @@ export async function assetActivityReport(
       ...new Set(events.map((e) => e.assetId).filter(Boolean)),
     ] as string[];
     const assets = await db.asset.findMany({
-      where: { id: { in: assetIds } },
+      where: { id: { in: assetIds }, organizationId },
       select: {
         id: true,
         organizationId: true,
@@ -3324,8 +3337,8 @@ export async function assetActivityReport(
 
     let mostActiveName = "—";
     if (assetActivityCounts.length > 0 && assetActivityCounts[0].assetId) {
-      const mostActiveAsset = await db.asset.findUnique({
-        where: { id: assetActivityCounts[0].assetId },
+      const mostActiveAsset = await db.asset.findFirst({
+        where: { id: assetActivityCounts[0].assetId, organizationId },
         select: { title: true },
       });
       mostActiveName = mostActiveAsset?.title || "—";

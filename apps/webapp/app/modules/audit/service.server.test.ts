@@ -10,6 +10,7 @@ import {
   addAssetsToAudit,
   removeAssetFromAudit,
   removeAssetsFromAudit,
+  getAuditsForOrganization,
   getPendingAuditsForOrganization,
   getAuditWhereInput,
   bulkArchiveAudits,
@@ -17,6 +18,7 @@ import {
   deleteAuditSession,
   bulkDeleteAudits,
   duplicateAuditSession,
+  recordAuditScan,
 } from "./service.server";
 
 // why: storage.server calls Supabase over HTTP; mock so delete tests stay offline
@@ -73,11 +75,16 @@ vi.mock("~/database/db.server", () => {
       findUnique: vi.fn(),
       findUniqueOrThrow: vi.fn(),
       findFirst: vi.fn(),
+      findFirstOrThrow: vi.fn(),
       findMany: vi.fn(),
       update: vi.fn(),
       updateMany: vi.fn(),
       delete: vi.fn(),
       deleteMany: vi.fn(),
+      // why: getAuditsForOrganization runs findMany + count in parallel
+      // for pagination; without this mock the Promise.all rejects with
+      // "count is not a function" and the test crashes before assertions.
+      count: vi.fn(),
     },
     auditNote: {
       create: vi.fn(),
@@ -100,8 +107,14 @@ vi.mock("~/database/db.server", () => {
     auditImage: {
       findMany: vi.fn(),
     },
+    auditScan: {
+      findFirst: vi.fn(),
+      create: vi.fn(),
+      update: vi.fn(),
+    },
     asset: {
       findMany: vi.fn(),
+      findUnique: vi.fn(),
     },
     $transaction: vi.fn(),
   };
@@ -117,6 +130,7 @@ const mockDb = db as unknown as {
     findUnique: ReturnType<typeof vi.fn>;
     findUniqueOrThrow: ReturnType<typeof vi.fn>;
     findFirst: ReturnType<typeof vi.fn>;
+    findFirstOrThrow: ReturnType<typeof vi.fn>;
     findMany: ReturnType<typeof vi.fn>;
     update: ReturnType<typeof vi.fn>;
     updateMany: ReturnType<typeof vi.fn>;
@@ -144,8 +158,14 @@ const mockDb = db as unknown as {
   auditImage: {
     findMany: ReturnType<typeof vi.fn>;
   };
+  auditScan: {
+    findFirst: ReturnType<typeof vi.fn>;
+    create: ReturnType<typeof vi.fn>;
+    update: ReturnType<typeof vi.fn>;
+  };
   asset: {
     findMany: ReturnType<typeof vi.fn>;
+    findUnique: ReturnType<typeof vi.fn>;
   };
   $transaction: ReturnType<typeof vi.fn>;
 };
@@ -189,7 +209,10 @@ describe("audit service", () => {
       createdAt: new Date(),
       updatedAt: new Date(),
     });
-    mockDb.auditSession.findUnique.mockResolvedValue({
+    // createAuditSession re-fetches the new session via org-scoped findFirst
+    // (was findUnique); stub both so the value resolves regardless of which
+    // read path the code uses.
+    const createdSession = {
       id: "audit-1",
       name: defaultInput.name,
       description: defaultInput.description,
@@ -218,7 +241,9 @@ describe("audit service", () => {
         },
       ],
       assets: [],
-    });
+    };
+    mockDb.auditSession.findUnique.mockResolvedValue(createdSession);
+    mockDb.auditSession.findFirst.mockResolvedValue(createdSession);
     mockDb.auditAsset.createMany.mockResolvedValue({ count: 2 });
     mockDb.auditAssignment.createMany.mockResolvedValue({ count: 1 });
     mockDb.auditAsset.findMany.mockResolvedValue([
@@ -835,6 +860,8 @@ describe("audit service", () => {
         expect(mockDb.auditSession.updateMany).toHaveBeenCalledWith({
           where: {
             id: { in: ["a1", "a2"] },
+            // Write is org-scoped as defense-in-depth
+            organizationId: "org-1",
             status: {
               in: [AuditStatus.COMPLETED, AuditStatus.CANCELLED],
             },
@@ -1407,8 +1434,36 @@ describe("audit service", () => {
       // each test relies on.
       vi.clearAllMocks();
 
-      // Original audit lookup — overridden per test for not-found cases.
-      mockDb.auditSession.findFirst.mockResolvedValue(originalAudit);
+      // duplicateAuditSession reads the original via findFirst; the nested
+      // createAuditSession re-fetches the NEW session via the same org-scoped
+      // findFirst (was findUnique). Discriminate by where.id so per-test
+      // mockResolvedValueOnce overrides on the original lookup still work,
+      // while the create re-fetch ("audit-copy") always returns the copy.
+      const copySession = {
+        id: "audit-copy",
+        name: `${originalAudit.name} (Copy)`,
+        description: originalAudit.description,
+        organizationId: "org-1",
+        createdById: baseInput.userId,
+        expectedAssetCount: 3,
+        foundAssetCount: 0,
+        missingAssetCount: 3,
+        unexpectedAssetCount: 0,
+        status: AuditStatus.PENDING,
+        scopeMeta: originalAudit.scopeMeta,
+        targetId: null,
+        startedAt: null,
+        completedAt: null,
+        cancelledAt: null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        assignments: [],
+      };
+      mockDb.auditSession.findFirst.mockImplementation((args: any) =>
+        Promise.resolve(
+          args?.where?.id === "audit-copy" ? copySession : originalAudit
+        )
+      );
 
       // Default: all assets still exist.
       mockDb.asset.findMany.mockResolvedValue([
@@ -1650,11 +1705,15 @@ describe("audit service", () => {
       // Atomic transition succeeds (count: 1) and the post-update re-fetch
       // returns the cancelled row.
       mockDb.auditSession.updateMany.mockResolvedValue({ count: 1 });
-      mockDb.auditSession.findUniqueOrThrow.mockResolvedValue({
+      // cancelAuditSession re-fetches the cancelled row via org-scoped
+      // findFirstOrThrow (was findUniqueOrThrow); stub both.
+      const cancelledRow = {
         ...baseAudit,
         status: AuditStatus.CANCELLED,
         cancelledAt: new Date(),
-      });
+      };
+      mockDb.auditSession.findUniqueOrThrow.mockResolvedValue(cancelledRow);
+      mockDb.auditSession.findFirstOrThrow.mockResolvedValue(cancelledRow);
       mockDb.user.findFirst.mockResolvedValue({
         firstName: "Acting",
         lastName: "User",
@@ -1897,6 +1956,207 @@ describe("audit service", () => {
       expect(sendAuditCancelledEmails).toHaveBeenCalledWith(
         expect.objectContaining({ cancelledByName: "the audit creator" })
       );
+    });
+  });
+
+  describe("getAuditsForOrganization", () => {
+    // why: the shared `mockDb` above declares `auditSession.count` as a
+    // `vi.fn()` returning `unknown` — that's enough for vi.mocked to
+    // surface it as a typed mock here without resorting to `as any`,
+    // which silenced the very type signal these tests should provide.
+    const mockDb = vi.mocked(db, true);
+
+    beforeEach(() => {
+      mockDb.auditSession.findMany.mockResolvedValue([]);
+      mockDb.auditSession.count.mockResolvedValue(0);
+    });
+
+    it("scopes to the caller's assignments when assignedToUserId is set (admin opt-in)", async () => {
+      await getAuditsForOrganization({
+        organizationId: "org-1",
+        userId: "admin-user",
+        isSelfServiceOrBase: false,
+        assignedToUserId: "admin-user",
+      });
+
+      const findManyArgs = mockDb.auditSession.findMany.mock.calls[0]?.[0];
+      expect(findManyArgs).toBeDefined();
+      if (!findManyArgs) return;
+      expect(findManyArgs.where).toMatchObject({
+        organizationId: "org-1",
+        assignments: { some: { userId: "admin-user" } },
+      });
+    });
+
+    it("does NOT scope to assignments for admin/owner when assignedToUserId is null", async () => {
+      await getAuditsForOrganization({
+        organizationId: "org-1",
+        userId: "admin-user",
+        isSelfServiceOrBase: false,
+        assignedToUserId: null,
+      });
+
+      const findManyArgs = mockDb.auditSession.findMany.mock.calls[0]?.[0];
+      expect(findManyArgs).toBeDefined();
+      if (!findManyArgs) return;
+      // why: the toggle is OFF — admin/owner sees all audits, not just theirs.
+      expect(findManyArgs.where).toBeDefined();
+      expect(findManyArgs.where!.assignments).toBeUndefined();
+    });
+
+    it("auto-scopes for BASE/SELF_SERVICE even when assignedToUserId is unset", async () => {
+      await getAuditsForOrganization({
+        organizationId: "org-1",
+        userId: "base-user",
+        isSelfServiceOrBase: true,
+      });
+
+      const findManyArgs = mockDb.auditSession.findMany.mock.calls[0]?.[0];
+      expect(findManyArgs).toBeDefined();
+      if (!findManyArgs) return;
+      expect(findManyArgs.where).toBeDefined();
+      expect(findManyArgs.where!.assignments).toEqual({
+        some: { userId: "base-user" },
+      });
+    });
+
+    it("throws when isSelfServiceOrBase is true but userId is missing", async () => {
+      // why: silently falling back to assignedToUserId (or null) when a
+      // caller signals role-scoping but forgets the userId would leak
+      // the whole org list to a BASE/SELF_SERVICE user. The guard fails
+      // loud so the bug surfaces in dev/tests, not in customers' hands.
+      await expect(
+        getAuditsForOrganization({
+          organizationId: "org-1",
+          isSelfServiceOrBase: true,
+          // userId intentionally omitted
+        })
+      ).rejects.toThrow(/Missing user context/);
+      expect(mockDb.auditSession.findMany).not.toHaveBeenCalled();
+    });
+
+    it("applies (dueDate asc nulls last, createdAt desc) when prioritizeDeadlines is true", async () => {
+      await getAuditsForOrganization({
+        organizationId: "org-1",
+        prioritizeDeadlines: true,
+      });
+
+      const findManyArgs = mockDb.auditSession.findMany.mock.calls[0]?.[0];
+      expect(findManyArgs).toBeDefined();
+      if (!findManyArgs) return;
+      expect(findManyArgs.orderBy).toEqual([
+        { dueDate: { sort: "asc", nulls: "last" } },
+        { createdAt: "desc" },
+      ]);
+    });
+
+    it("falls back to the legacy single-field orderBy when prioritizeDeadlines is false", async () => {
+      await getAuditsForOrganization({
+        organizationId: "org-1",
+        orderBy: "createdAt",
+        orderDirection: "desc",
+      });
+
+      const findManyArgs = mockDb.auditSession.findMany.mock.calls[0]?.[0];
+      expect(findManyArgs).toBeDefined();
+      if (!findManyArgs) return;
+      expect(findManyArgs.orderBy).toEqual([{ createdAt: "desc" }]);
+    });
+  });
+
+  describe("recordAuditScan asset guard", () => {
+    const scanInput = {
+      auditSessionId: "audit-1",
+      qrId: "qr-1",
+      assetId: "asset-1",
+      isExpected: true,
+      userId: "user-1",
+      organizationId: "org-1",
+    };
+
+    beforeEach(() => {
+      // Valid, org-owned, non-archived session; no prior scan recorded.
+      mockDb.auditSession.findFirst.mockResolvedValue({
+        id: "audit-1",
+        organizationId: "org-1",
+        status: AuditStatus.ACTIVE,
+        foundAssetCount: 0,
+        unexpectedAssetCount: 0,
+        missingAssetCount: 0,
+      });
+      mockDb.auditScan.findFirst.mockResolvedValue(null);
+      mockDb.user.findUnique.mockResolvedValue({
+        id: "user-1",
+        firstName: "Scan",
+        lastName: "User",
+        displayName: "Scan User",
+      });
+    });
+
+    it("returns a non-captured 404 when the scanned asset does not exist", async () => {
+      mockDb.asset.findUnique.mockResolvedValue(null);
+
+      await expect(recordAuditScan(scanInput)).rejects.toMatchObject({
+        status: 404,
+        shouldBeCaptured: false,
+      });
+      // The FK-violating create must never be reached.
+      expect(mockDb.auditScan.create).not.toHaveBeenCalled();
+    });
+
+    it("returns a non-captured 404 when the asset belongs to another org", async () => {
+      mockDb.asset.findUnique.mockResolvedValue({
+        id: "asset-1",
+        title: "Cross-org camera",
+        organizationId: "org-2",
+      });
+
+      await expect(recordAuditScan(scanInput)).rejects.toMatchObject({
+        status: 404,
+        shouldBeCaptured: false,
+      });
+      expect(mockDb.auditScan.create).not.toHaveBeenCalled();
+    });
+
+    it("validates the asset before the duplicate-scan short-circuit", async () => {
+      // A stale AuditScan row exists for a now-cross-org asset (legacy data
+      // from the previously unguarded path). The org guard must win over the
+      // duplicate-scan early return so the retry cannot report success.
+      mockDb.asset.findUnique.mockResolvedValue({
+        id: "asset-1",
+        title: "Cross-org camera",
+        organizationId: "org-2",
+      });
+      mockDb.auditScan.findFirst.mockResolvedValue({
+        id: "stale-scan-1",
+        auditAssetId: "stale-audit-asset-1",
+      });
+
+      await expect(recordAuditScan(scanInput)).rejects.toMatchObject({
+        status: 404,
+        shouldBeCaptured: false,
+      });
+    });
+
+    it("converts a TOCTOU asset-FK violation into a non-captured 404", async () => {
+      // Guard passes (asset valid at check time)...
+      mockDb.asset.findUnique.mockResolvedValue({
+        id: "asset-1",
+        title: "Valid camera",
+        organizationId: "org-1",
+      });
+      // ...but the asset is deleted before the insert, so the create inside
+      // the transaction throws a Prisma P2003 on AuditScan_assetId_fkey.
+      mockDb.auditScan.create.mockRejectedValue({
+        code: "P2003",
+        meta: { modelName: "AuditScan", constraint: "AuditScan_assetId_fkey" },
+        name: "PrismaClientKnownRequestError",
+      });
+
+      await expect(recordAuditScan(scanInput)).rejects.toMatchObject({
+        status: 404,
+        shouldBeCaptured: false,
+      });
     });
   });
 });
