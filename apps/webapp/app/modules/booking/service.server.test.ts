@@ -6,6 +6,7 @@ import {
 } from "@prisma/client";
 
 import { db } from "~/database/db.server";
+import { createSystemBookingNote } from "~/modules/booking-note/service.server";
 import * as noteService from "~/modules/note/service.server";
 import { ShelfError } from "~/utils/error";
 import { wrapBookingStatusForNote } from "~/utils/markdoc-wrappers";
@@ -33,6 +34,7 @@ import {
   extendBooking,
   removeAssets,
   getOngoingBookingForAsset,
+  bulkArchiveBookings,
   // Test helper functions
   getActionTextFromTransition,
   getSystemActionText,
@@ -80,6 +82,7 @@ vitest.mock("~/database/db.server", () => ({
       findFirst: vitest.fn().mockResolvedValue(null),
       findMany: vitest.fn().mockResolvedValue([]),
       delete: vitest.fn().mockResolvedValue({}),
+      updateMany: vitest.fn().mockResolvedValue({ count: 0 }),
       count: vitest.fn().mockResolvedValue(0),
     },
     asset: {
@@ -1692,7 +1695,7 @@ describe("checkoutBooking", () => {
   });
 
   it("should throw error when assets have booking conflicts", async () => {
-    expect.assertions(1);
+    expect.assertions(2);
 
     const mockBooking = {
       ...mockBookingData,
@@ -1720,6 +1723,11 @@ describe("checkoutBooking", () => {
     await expect(checkoutBooking(mockCheckoutParams)).rejects.toThrow(
       "Cannot check out booking. Some assets are already booked or checked out: Asset 1. Please remove conflicted assets and try again."
     );
+    // Expected business-rule conflict — must not be captured to Sentry
+    // (was noise: SHELF-WEBAPP-1KR; mirrors the reserve path).
+    await expect(checkoutBooking(mockCheckoutParams)).rejects.toMatchObject({
+      shouldBeCaptured: false,
+    });
   });
 
   it("should handle checkout for non-reserved booking", async () => {
@@ -3364,5 +3372,75 @@ describe("getOngoingBookingForAsset", () => {
       },
     });
     expect(result).toEqual(checkedOutBooking);
+  });
+});
+
+describe("bulkArchiveBookings", () => {
+  beforeEach(() => {
+    vitest.clearAllMocks();
+  });
+
+  // Regression for Sentry SHELF-WEBAPP-1KQ: the per-booking status notes used
+  // to run inside an interactive transaction, which held the tx open across N
+  // sequential note writes and aborted the commit with P2028 on large
+  // selections. Notes are written via the global db (never `tx`), so they were
+  // never atomic — they must run AFTER a plain `updateMany`, with no tx.
+  it("archives via a plain updateMany (no interactive tx) and persists a status note for each booking", async () => {
+    expect.assertions(4);
+    //@ts-expect-error mock setup
+    db.booking.findMany.mockResolvedValue([
+      {
+        id: "b1",
+        status: BookingStatus.COMPLETE,
+        custodianUserId: "u1",
+        activeSchedulerReference: null,
+      },
+      {
+        id: "b2",
+        status: BookingStatus.COMPLETE,
+        custodianUserId: null,
+        activeSchedulerReference: null,
+      },
+    ]);
+
+    await bulkArchiveBookings({
+      bookingIds: ["b1", "b2"],
+      organizationId: "org-1",
+    });
+
+    expect(db.booking.updateMany).toHaveBeenCalledWith({
+      where: { id: { in: ["b1", "b2"] }, organizationId: "org-1" },
+      data: { status: BookingStatus.ARCHIVED },
+    });
+    // The fix removed the interactive transaction entirely for this path.
+    expect(db.$transaction).not.toHaveBeenCalled();
+
+    // Observable outcome: each archived booking gets its own status note in the
+    // caller's org. `createSystemBookingNote` is the persistence boundary the
+    // suite stubs for booking notes (it forwards to db.bookingNote.create), so
+    // we assert per-booking payload here rather than just a call count.
+    expect(createSystemBookingNote).toHaveBeenCalledWith(
+      expect.objectContaining({ bookingId: "b1", organizationId: "org-1" })
+    );
+    expect(createSystemBookingNote).toHaveBeenCalledWith(
+      expect.objectContaining({ bookingId: "b2", organizationId: "org-1" })
+    );
+  });
+
+  it("throws if any selected booking is not COMPLETE", async () => {
+    expect.assertions(1);
+    //@ts-expect-error mock setup
+    db.booking.findMany.mockResolvedValue([
+      {
+        id: "b1",
+        status: BookingStatus.ONGOING,
+        custodianUserId: null,
+        activeSchedulerReference: null,
+      },
+    ]);
+
+    await expect(
+      bulkArchiveBookings({ bookingIds: ["b1"], organizationId: "org-1" })
+    ).rejects.toThrow(ShelfError);
   });
 });

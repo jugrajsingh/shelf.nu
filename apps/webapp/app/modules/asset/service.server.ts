@@ -104,6 +104,7 @@ import {
 import { isValidImageUrl } from "~/utils/misc";
 import { threeDaysFromNow } from "~/utils/one-week-from-now";
 import {
+  assertCustomFieldsBelongToOrg,
   assertLocationBelongsToOrg,
   assertTagsBelongToOrg,
   assertTeamMemberBelongsToOrg,
@@ -1160,11 +1161,24 @@ export async function createAsset({
         });
       }
 
+      /** Custom-field ids referenced by this create. Sourced from form input
+       * and validated for org ownership inside the create transaction below
+       * (cross-org IDOR guard). */
+      let customFieldIdsToValidate: string[] = [];
+
       /** If custom fields are passed, create them */
       if (customFieldsValues && customFieldsValues.length > 0) {
         const customFieldValuesToAdd = customFieldsValues.filter(
           (cf) => !!cf.value
         );
+
+        // SECURITY (cross-org IDOR): these ids get connected to a CustomField
+        // by the nested `create` below, which has no org scoping of its own.
+        // Collected here and validated inside the transaction (see the
+        // assertCustomFieldsBelongToOrg call there).
+        customFieldIdsToValidate = customFieldValuesToAdd
+          .map(({ id }) => id)
+          .filter(Boolean);
 
         Object.assign(data, {
           /** Custom fields here refers to the values, check the Schema for more info */
@@ -1219,6 +1233,15 @@ export async function createAsset({
 
       // Use transaction to ensure asset creation and activity event are atomic
       const asset = await db.$transaction(async (tx) => {
+        // SECURITY (cross-org IDOR): prove every form-supplied custom-field id
+        // belongs to this org before the nested create connects them. Run inside
+        // the tx so the ownership check shares the write's transaction (no-op
+        // when there are no custom-field ids).
+        await assertCustomFieldsBelongToOrg(
+          { customFieldIds: customFieldIdsToValidate, organizationId },
+          tx
+        );
+
         const created = await tx.asset.create({
           data,
           include: {
@@ -1486,24 +1509,71 @@ export async function updateAsset({
         (cf) => !cf.value
       );
 
+      // SECURITY (cross-org IDOR): the create/updateMany writes below connect
+      // values to a CustomField by an id sourced from form input. Prove every
+      // referenced custom field belongs to this org before writing. (Removals
+      // go through `deleteMany` scoped to this asset's own value rows, so only
+      // the added/updated ids need the check.)
+      await assertCustomFieldsBelongToOrg({
+        customFieldIds: customFieldValuesToAdd
+          .map(({ id }) => id)
+          .filter(Boolean),
+        organizationId,
+      });
+
+      /**
+       * Split the writes into create vs update ourselves instead of using a
+       * nested `upsert`. Prisma emulates each nested upsert with a
+       * SELECT-then-write round-trip per field, which is the N+1 reported in
+       * Sentry SHELF-WEBAPP-1KY / SHELF-WEBAPP-1MF. We already loaded the
+       * existing values above (`currentCustomFieldsValuesWithFields`), so we
+       * know which fields exist without asking the database again. Each
+       * custom field has at most one value row per asset, so keying by
+       * `customFieldId` is unambiguous.
+       */
+      const existingValueIdByFieldId = new Map(
+        currentCustomFieldsValuesWithFields.map((ccfv) => [
+          ccfv.customFieldId,
+          ccfv.id,
+        ])
+      );
+
+      const customFieldsToCreate = customFieldValuesToAdd
+        .filter(({ id }) => !existingValueIdByFieldId.has(id))
+        .map(({ id, value }) => ({ value, customFieldId: id }));
+
+      /**
+       * Existing values are written with `updateMany` (one entry per row),
+       * NOT a nested `update`. `update` would throw P2025 and abort the whole
+       * asset save if a concurrent edit deleted the value row in the window
+       * between the `findMany` above and this write; `updateMany` matches zero
+       * rows instead of throwing. The concurrent delete then wins (the row
+       * stays gone) rather than 500-ing the user — an acceptable
+       * last-write-wins outcome for this rare interleaving, and it keeps the
+       * per-field existence SELECT eliminated.
+       */
+      const customFieldsToUpdate = customFieldValuesToAdd
+        .filter(({ id }) => existingValueIdByFieldId.has(id))
+        .map(({ id, value }) => ({
+          where: { id: existingValueIdByFieldId.get(id) as string },
+          data: { value },
+        }));
+
       Object.assign(data, {
         customFields: {
-          upsert: customFieldValuesToAdd?.map(({ id, value }) => ({
-            where: {
-              id:
-                currentCustomFieldsValuesWithFields.find(
-                  (ccfv) => ccfv.customFieldId === id
-                )?.id || "",
-            },
-            update: { value },
-            create: {
-              value,
-              customFieldId: id,
-            },
-          })),
-          deleteMany: customFieldValuesToRemove.map((cf) => ({
-            customFieldId: cf.id,
-          })),
+          ...(customFieldsToCreate.length > 0
+            ? { create: customFieldsToCreate }
+            : {}),
+          ...(customFieldsToUpdate.length > 0
+            ? { updateMany: customFieldsToUpdate }
+            : {}),
+          ...(customFieldValuesToRemove.length > 0
+            ? {
+                deleteMany: customFieldValuesToRemove.map((cf) => ({
+                  customFieldId: cf.id,
+                })),
+              }
+            : {}),
         },
       });
     }
@@ -3918,29 +3988,37 @@ export async function bulkDeleteAssets({
     });
 
     try {
-      await db.$transaction(async (tx) => {
-        // Activity events — one ASSET_DELETED per asset, emitted before the
-        // delete so the rows still exist for any cross-ref checks. Mirrors
-        // singular `deleteAsset`.
-        if (assets.length > 0) {
-          await recordEvents(
-            assets.map((asset) => ({
-              organizationId,
-              actorUserId: userId,
-              action: "ASSET_DELETED" as const,
-              entityType: "ASSET" as const,
-              entityId: asset.id,
-              assetId: asset.id,
-            })),
-            tx
-          );
-        }
+      // Defense-in-depth: a bulk delete cascades across every asset relation
+      // (notes, custody, codes, custom-field values, booking joins …), so a
+      // large selection can creep past Prisma's 5s interactive-tx default and
+      // abort with P2028 (Sentry SHELF-WEBAPP-1MJ). Bump the ceiling to 15s,
+      // matching the booking-checkout precedent.
+      await db.$transaction(
+        async (tx) => {
+          // Activity events — one ASSET_DELETED per asset, emitted before the
+          // delete so the rows still exist for any cross-ref checks. Mirrors
+          // singular `deleteAsset`.
+          if (assets.length > 0) {
+            await recordEvents(
+              assets.map((asset) => ({
+                organizationId,
+                actorUserId: userId,
+                action: "ASSET_DELETED" as const,
+                entityType: "ASSET" as const,
+                entityId: asset.id,
+                assetId: asset.id,
+              })),
+              tx
+            );
+          }
 
-        await tx.asset.deleteMany({
-          // eslint-disable-next-line local-rules/require-org-scope-on-id-queries -- idor-safe: `assets` was fetched on lines 3659-3665 with where { id in resolvedIds, organizationId }; every id here is already org-proven
-          where: { id: { in: assets.map((asset) => asset.id) } },
-        });
-      });
+          await tx.asset.deleteMany({
+            // eslint-disable-next-line local-rules/require-org-scope-on-id-queries -- idor-safe: `assets` was fetched on lines 3659-3665 with where { id in resolvedIds, organizationId }; every id here is already org-proven
+            where: { id: { in: assets.map((asset) => asset.id) } },
+          });
+        },
+        { timeout: 15000 }
+      );
 
       /** Deleting images of the assets (if any) */
       const assetsWithImages = assets.filter((asset) => !!asset.mainImage);
@@ -4791,55 +4869,62 @@ export async function bulkAssignAssetTags({
         }, new Map())
       );
 
-    const updatedAssets = await db.$transaction(async (tx) => {
-      const results = await Promise.all(
-        resolvedIds.map((id) =>
-          tx.asset.update({
-            where: { id, organizationId },
-            data: {
-              tags: {
-                [remove ? "disconnect" : "connect"]: tagsIds.map((tagId) => ({
-                  id: tagId,
-                })),
+    // Defense-in-depth: this issues one `asset.update` per selected asset
+    // inside the interactive tx (needed to diff each asset's tag set), so a
+    // large selection serially exhausts Prisma's 5s default and aborts with
+    // P2028 (Sentry SHELF-WEBAPP-1MH). Bump the ceiling to 15s.
+    const updatedAssets = await db.$transaction(
+      async (tx) => {
+        const results = await Promise.all(
+          resolvedIds.map((id) =>
+            tx.asset.update({
+              where: { id, organizationId },
+              data: {
+                tags: {
+                  [remove ? "disconnect" : "connect"]: tagsIds.map((tagId) => ({
+                    id: tagId,
+                  })),
+                },
               },
-            },
-            include: {
-              tags: { select: { id: true, name: true } },
-            },
-          })
-        )
-      );
+              include: {
+                tags: { select: { id: true, name: true } },
+              },
+            })
+          )
+        );
 
-      // Activity events — one ASSET_TAGS_CHANGED per asset whose tag set
-      // actually changed. Same shape as the singular `updateAsset` flow.
-      const tagChangeEvents: Parameters<typeof recordEvents>[0] = [];
-      for (const asset of results) {
-        const previousTags = previousTagsByAssetId.get(asset.id) ?? [];
-        const previousTagIds = new Set(previousTags.map((t) => t.id));
-        const currentTagIds = new Set(asset.tags.map((t) => t.id));
-        const setsDiffer =
-          previousTagIds.size !== currentTagIds.size ||
-          [...previousTagIds].some((t) => !currentTagIds.has(t));
-        if (setsDiffer) {
-          tagChangeEvents.push({
-            organizationId,
-            actorUserId: userId,
-            action: "ASSET_TAGS_CHANGED",
-            entityType: "ASSET",
-            entityId: asset.id,
-            assetId: asset.id,
-            field: "tags",
-            fromValue: [...previousTagIds],
-            toValue: [...currentTagIds],
-          });
+        // Activity events — one ASSET_TAGS_CHANGED per asset whose tag set
+        // actually changed. Same shape as the singular `updateAsset` flow.
+        const tagChangeEvents: Parameters<typeof recordEvents>[0] = [];
+        for (const asset of results) {
+          const previousTags = previousTagsByAssetId.get(asset.id) ?? [];
+          const previousTagIds = new Set(previousTags.map((t) => t.id));
+          const currentTagIds = new Set(asset.tags.map((t) => t.id));
+          const setsDiffer =
+            previousTagIds.size !== currentTagIds.size ||
+            [...previousTagIds].some((t) => !currentTagIds.has(t));
+          if (setsDiffer) {
+            tagChangeEvents.push({
+              organizationId,
+              actorUserId: userId,
+              action: "ASSET_TAGS_CHANGED",
+              entityType: "ASSET",
+              entityId: asset.id,
+              assetId: asset.id,
+              field: "tags",
+              fromValue: [...previousTagIds],
+              toValue: [...currentTagIds],
+            });
+          }
         }
-      }
-      if (tagChangeEvents.length > 0) {
-        await recordEvents(tagChangeEvents, tx);
-      }
+        if (tagChangeEvents.length > 0) {
+          await recordEvents(tagChangeEvents, tx);
+        }
 
-      return results;
-    });
+        return results;
+      },
+      { timeout: 15000 }
+    );
 
     await Promise.all(
       updatedAssets.map((asset) =>
